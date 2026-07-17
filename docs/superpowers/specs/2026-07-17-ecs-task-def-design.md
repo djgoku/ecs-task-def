@@ -1,7 +1,10 @@
 # ecs-task-def — design
 
 Date: 2026-07-17
-Status: approved (brainstorm session, all decisions validated below)
+Status: approved (brainstorm session, all decisions validated below; revised
+same day after external review — see Deliverables for the target-state/current-state
+distinction: the repo currently contains only this spec, everything named
+below is a deliverable to build)
 
 ## What it is
 
@@ -11,6 +14,11 @@ Amazon ECS task-definition JSON file. It is a pure generator: it never talks to
 AWS. Users register the output themselves
 (`aws ecs register-task-definition --cli-input-json file://taskdef.json`).
 
+"Validated" means conformance to the awslabs JSON schema (plus Pkl's type
+checks) — not a guarantee that AWS accepts the definition. Runtime constraints
+the schema does not encode (e.g. valid Fargate cpu/memory combinations) can
+still be rejected at registration time.
+
 Design priorities, in order:
 
 1. **Great errors.** Every failure states location, what is wrong, and how to
@@ -18,8 +26,10 @@ Design priorities, in order:
    empty.
 2. **Start small, build up.** v1 covers the full task-definition surface via
    schema validation, but keeps the tool surface minimal (two commands).
-3. **Single-binary story**, with one documented external requirement: the
-   `pkl` CLI on PATH.
+3. **Single-binary story**, with one documented external *tool* requirement:
+   the `pkl` CLI on PATH. (Default `init` templates additionally need network
+   on the first eval to fetch the schema package — pkl caches it afterward;
+   `init --vendor` is the fully offline/air-gapped path. See Distribution.)
 
 ## Validated foundations (tested 2026-07-17, see ~/.claude/knowledge-base/pkl.md)
 
@@ -34,22 +44,37 @@ Design priorities, in order:
 - A 20-line user file amending that module produced correct task-definition
   JSON; a typo'd field and a missing `read("env:VAR")` both failed at eval
   with file:line + object-path errors.
-- `ex_json_schema` 0.11.5 supports draft-07 (README; passes the official JSON
-  Schema test suite).
+- `ex_json_schema` 0.11.5 loads and enforces this exact schema (spike-proven,
+  see Resolved risk below — including the one gotcha and its fix).
 - `pkg.pkl-lang.org` mechanically redirects
   `github.com/<owner>/<repo>/<name>@<ver>` package URIs to that repo's GitHub
   release assets, so publishing a Pkl package requires only attaching
   `pkl project package` output to a normal GitHub release.
 
-## Open risk (spike first in implementation)
+## Resolved risk: Unicode regex patterns (spike completed 2026-07-17)
 
-The awslabs schema uses Unicode property escapes (`\p{L}`) in regex patterns.
-Python's `re` cannot compile them (proven: python-jsonschema fails on the
-schema itself). Erlang's PCRE-based regex should handle them, but this is
-**unvalidated** for `ex_json_schema`. Implementation task 1 is a spike proving
-`ex_json_schema` loads and enforces this schema, patterns included. Fallback
-if it fails: preprocess patterns or drop `pattern` enforcement for affected
-fields (schema validation minus those patterns still beats no validation).
+The awslabs schema contains exactly **two** patterns using Unicode property
+escapes (`\p{L}` etc.): `tags[].key` and `tags[].value` (identical pattern).
+Spike results (Elixir 1.20.1/OTP 29, ex_json_schema 0.11.5, real schema +
+generated JSON):
+
+- `ex_json_schema` resolves and validates the draft-07 schema correctly, with
+  usable error tuples (`{"Type mismatch. Expected String but got Integer.", "#/cpu"}`).
+- **Gotcha found and fixed:** it compiles `pattern` regexes without Unicode
+  mode, so `\p{L}` matched only ASCII letters and wrongly rejected legal
+  non-ASCII tag keys (e.g. `"Ünïcode-Key_1"`). Prepending `(*UTF)(*UCP)` to
+  the pattern string fixes matching even under a flag-less `Regex.compile!/1`
+  (PCRE start-of-pattern verbs override compile options; proven directly).
+- **Decision:** when embedding the schema, preprocess the two `tags` patterns
+  with the `(*UTF)(*UCP)` prefix. Full pattern enforcement is retained — no
+  weakened validation, no fallback needed.
+- `check-jsonschema` (0.36.2) handles this schema as-is — its default regex
+  mode uses an ECMA-compatible engine, and its test suite includes fixtures
+  for this exact schema (contributed via
+  [check-jsonschema PR #512](https://github.com/python-jsonschema/check-jsonschema/pull/512)).
+  Proven locally against our generated output (valid → ok, invalid → correct
+  per-field errors), so the CI cross-check stands. Raw python-jsonschema
+  (which fails on these patterns) is not used anywhere.
 
 ## User experience
 
@@ -63,6 +88,37 @@ $ ecs-task-def generate mytask.pkl --env-file .env.production -o taskdef.json
 ✓ validated against ECS schema v1.4.0
 wrote taskdef.json
 ```
+
+(The displayed schema version comes from the pinned awslabs schema's own
+description — see Distribution for pinning.)
+
+### CLI contract
+
+Both commands validate their parsed options against a per-command
+NimbleOptions schema (see Architecture); `--help` text derives from the same
+schemas via `NimbleOptions.docs/1`.
+
+**`ecs-task-def generate INPUT.pkl [flags]`**
+
+| Flag | Alias | Type | Default | Meaning |
+|---|---|---|---|---|
+| `--output` | `-o` | path | stdout | Where the JSON goes |
+| `--env-file` | — | path | none | `.env` file merged under the process env |
+
+Exactly one INPUT argument is required. Progress/warning lines go to stderr;
+the JSON document is the only thing ever written to stdout (when `-o` is not
+given), so piping is safe.
+
+**`ecs-task-def init [DIR] [flags]`**
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--vendor` | boolean | false | Also write `EcsSchema.pkl` locally; `amends` points at it instead of the package URL |
+
+DIR defaults to the current directory. Files written: `mytask.pkl` (starter
+template), plus `EcsSchema.pkl` with `--vendor`. `init` **never overwrites**:
+if any target file already exists, it exits 6 listing the conflicting paths
+and writes nothing (no partial scaffold).
 
 A user file looks like:
 
@@ -93,6 +149,22 @@ Because the file `amends` the typed module, typos and wrong types fail at
 - Templates read variables with Pkl-native `read("env:NAME")`.
 - `--env-file FILE` parses plain `KEY=VALUE` lines (`#` comments, blank lines
   allowed). Malformed lines error with `file:line: reason`.
+- Exact `.env` grammar (kept deliberately small; anything outside it is a
+  line-numbered error, per the great-errors priority):
+  - One `KEY=VALUE` per line. An optional `export ` prefix is accepted and
+    ignored. CRLF line endings and a leading UTF-8 BOM are tolerated.
+  - `KEY` must match `[A-Za-z_][A-Za-z0-9_]*` (after trimming whitespace).
+  - `VALUE` is everything after the **first** `=` (so values may contain `=`),
+    with surrounding whitespace trimmed. Empty values (`KEY=`) are legal. If
+    the trimmed value is wrapped in matching single or double quotes, one
+    outer quote pair is stripped; no escape-sequence processing, no multiline
+    values, no inline comments (a trailing `# ...` is part of the value —
+    quote-strip aside, values are verbatim).
+  - Full-line comments (first non-whitespace char `#`) and blank lines are
+    skipped.
+  - Duplicate keys within the file: **last one wins**, with a stderr warning
+    naming the key and both line numbers.
+  - A line with no `=`, or an invalid key: error `file:line: reason`, exit 3.
 - Merge rule: **process environment wins over the env file** (12-factor: the
   file supplies defaults; the real environment overrides). This matches the
   dotenv-family default (node dotenv, python-dotenv, ruby dotenv all defer to
@@ -111,10 +183,18 @@ Because the file `amends` the typed module, typos and wrong types fail at
 
 ## Distribution of the schema module
 
+- The awslabs schema is **pinned by commit SHA** in the regen mix task; the
+  pinned `schema.json` is committed to this repo (it is also what gets
+  embedded in `priv/` for the validator). The user-visible schema version
+  string (e.g. "v1.4.0") is parsed from the schema's own description field —
+  one source, no drift.
 - `pkl/EcsSchema.pkl` is generated by the codegen and **committed to this
-  repo** — the single source of truth.
-- `mix ecs.regen_schema` re-runs the codegen against the awslabs schema when
-  AWS updates it.
+  repo** — the single source of truth for the Pkl side.
+- `mix ecs.regen_schema` re-runs the codegen against the pinned awslabs
+  schema (bumping the pin is an explicit edit). It regenerates **both**
+  artifacts together — the committed `schema.json` and `EcsSchema.pkl` — and
+  CI fails if rerunning the task produces a diff, so the two can never be
+  out of sync with each other or with the pin.
 - Each GitHub release attaches: Burrito binaries per platform, plus the Pkl
   package artifacts (`pkl project package` output: metadata JSON + zip). That
   makes `package://pkg.pkl-lang.org/github.com/djgoku/aws-ecs-task-definition-generator/ecs-task-def@X.Y.Z#/EcsSchema.pkl`
@@ -161,8 +241,11 @@ generated `EcsSchema.pkl` (for `--vendor`), and the starter template.
    (JSON) and stderr (diagnostics) separately.
 4. **Decode + validate** — parse JSON; validate against the embedded schema;
    collect **all** violations, not just the first.
-5. **Write** — to `-o` file or stdout. Output is written only on full success;
-   no partial/invalid file is ever left behind.
+5. **Write** — to `-o` file or stdout. Output is written only on full
+   success. File writes are atomic: write to a temp file in the target's
+   directory, then rename over the destination (replacing any previous
+   version only as the final step); on any failure the temp file is removed
+   and an existing destination file is left untouched.
 
 ## Error handling
 
@@ -177,7 +260,7 @@ wrong and what to do:
 | 3 | env file missing/malformed | `path:line: reason` |
 | 4 | pkl eval failed | one-line stage header, then pkl's stderr passed through untouched (it already carries file:line + object path; missing env vars land here) |
 | 5 | schema validation failed | one line per violation, `containerDefinitions[0].cpu: expected integer, got "256"`, plus a count |
-| 6 | cannot write output | path + OS reason |
+| 6 | cannot write output / `init` target exists | path + OS reason; for `init`, the list of conflicting files |
 
 Principle: pkl's errors are already excellent — frame them (one-line header
 naming the failed stage), never rewrite them. Our own errors imitate the same
@@ -185,18 +268,37 @@ style: location first, then what, then how to fix.
 
 ## Testing
 
-- **Unit** (pure, no pkl): `EnvFile` parser, `Validator` error formatting,
-  CLI arg parsing, env merge precedence + shadow warning (differing values
-  warn, identical values don't, values never appear in the message).
+- **Unit** (pure, no pkl): `EnvFile` parser (full grammar matrix: quotes,
+  `export `, empty values, values containing `=`, duplicate keys, CRLF/BOM,
+  malformed lines), `Validator` error formatting, CLI arg parsing, env merge
+  precedence + shadow warning (differing values warn, identical values don't,
+  values never appear in the message), and the `(*UTF)(*UCP)` pattern
+  preprocessing (a non-ASCII tag key like `"Ünïcode-Key_1"` must validate; a
+  genuinely illegal tag key must still fail).
 - **Integration** (require real `pkl` on PATH; tagged to skip with a notice
   when absent): golden-file tests — fixture `.pkl` in, expected JSON out —
   plus one test per error-table row asserting exit code and message shape.
 - **CI cross-check**: every golden JSON is also validated with
   `check-jsonschema`; two independent validator implementations agreeing
   guards against bugs in either.
-- **Spike first**: prove `ex_json_schema` handles the schema's `\p{L}`
-  patterns (see Open risk).
-- CI: Linux + macOS, `pkl` installed via mise.
+- CI: Linux + macOS, `pkl` installed via mise; plus the regen-task drift
+  check (see Distribution).
+
+## Deliverables
+
+The repo currently contains only this spec. Implementation must produce:
+
+1. Elixir mix project with the six modules listed under Architecture; deps:
+   `ex_json_schema`, `nimble_options`, Burrito.
+2. Committed generated artifacts: `pkl/EcsSchema.pkl` + the pinned
+   `schema.json`, with `mix ecs.regen_schema` and its CI drift check.
+3. Embedded `priv/` assets: schema (with the two `tags` patterns preprocessed
+   with `(*UTF)(*UCP)`), `EcsSchema.pkl` copy for `--vendor`, starter
+   template.
+4. `PklProject` metadata so `pkl project package` produces the package
+   artifacts; release workflow attaching Burrito binaries per platform plus
+   the package artifacts, on releases tagged `ecs-task-def@X.Y.Z`.
+5. Test suite + CI as specified under Testing.
 
 ## Out of scope (v1)
 
