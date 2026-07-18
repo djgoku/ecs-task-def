@@ -1,0 +1,40 @@
+// Ported from aws-samples/aws-containers-task-definitions gunicorn/gunicorn_ec2.json
+amends "../../../pkl/EcsSchema.pkl"
+
+// See nginx_fargate.pkl for why logConfiguration.options needs a converter.
+output {
+  renderer = new JsonRenderer {
+    converters {
+      ["logConfiguration.options"] = (_) -> new Mapping {
+        ["awslogs-group"] = "/ecs/gunicorn"
+        ["awslogs-region"] = "us-east-1"
+        ["awslogs-stream-prefix"] = "ecs"
+      }
+    }
+  }
+}
+
+memory = "1024"
+networkMode = "awsvpc"
+cpu = "512"
+family = "gunicorn"
+
+containerDefinitions {
+  new {
+    memory = 256
+    portMappings {
+      new {
+        hostPort = 5000
+        containerPort = 5000
+        protocol = "tcp"
+      }
+    }
+    essential = true
+    name = "gunicorn"
+    environment {}
+    image = "danriti/gunicorn-flask"
+    logConfiguration {
+      logDriver = "awslogs"
+    }
+  }
+}

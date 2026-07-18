@@ -1,0 +1,47 @@
+// Ported from aws-samples/aws-containers-task-definitions kibana/kibana_fargate.json
+amends "../../../pkl/EcsSchema.pkl"
+
+// See nginx_fargate.pkl for why logConfiguration.options needs a converter.
+output {
+  renderer = new JsonRenderer {
+    converters {
+      ["logConfiguration.options"] = (_) -> new Mapping {
+        ["awslogs-group"] = "/ecs/kibana"
+        ["awslogs-region"] = "us-east-1"
+        ["awslogs-stream-prefix"] = "ecs"
+      }
+    }
+  }
+}
+
+memory = "2048"
+networkMode = "awsvpc"
+cpu = "1024"
+family = "kibana"
+requiresCompatibilities { "FARGATE" }
+
+containerDefinitions {
+  new {
+    portMappings {
+      new {
+        hostPort = 5601
+        containerPort = 5601
+        protocol = "tcp"
+      }
+    }
+    essential = true
+    name = "kibana"
+    environment {
+      new {
+        name = "ELASTICSEARCH_URL"
+        value = "<ES-URL>"
+      }
+    }
+    cpu = 1024
+    memory = 2048
+    image = "docker.elastic.co/kibana/kibana:6.0.0"
+    logConfiguration {
+      logDriver = "awslogs"
+    }
+  }
+}

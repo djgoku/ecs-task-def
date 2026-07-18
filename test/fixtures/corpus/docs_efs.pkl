@@ -1,0 +1,45 @@
+// Ported from the AWS ECS developer guide, "Configuring Amazon EFS file
+// systems for Amazon ECS using the console":
+// https://docs.aws.amazon.com/AmazonECS/latest/developerguide/tutorial-efs-volumes.html
+// The page embeds this task definition's JSON inside <code class="replaceable">
+// spans for its example placeholder values (path, volume name, file system
+// ID, transit-encryption setting); those spans' text content is exactly what
+// the page's own "Copy" button copies, so it was extracted (HTML tags
+// stripped, entities unescaped) verbatim rather than treated as separate
+// template holes.
+amends "../../../pkl/EcsSchema.pkl"
+
+family = "efs-tutorial"
+executionRoleArn = "arn:aws:iam::111122223333:role/ecsTaskExecutionRole"
+
+containerDefinitions {
+  new {
+    memory = 128
+    portMappings {
+      new {
+        hostPort = 80
+        containerPort = 80
+        protocol = "tcp"
+      }
+    }
+    essential = true
+    mountPoints {
+      new {
+        containerPath = "/usr/share/nginx/html"
+        sourceVolume = "efs-html"
+      }
+    }
+    name = "nginx"
+    image = "public.ecr.aws/docker/library/nginx:latest"
+  }
+}
+
+volumes {
+  new {
+    name = "efs-html"
+    efsVolumeConfiguration {
+      fileSystemId = "fs-1324abcd"
+      transitEncryption = "ENABLED"
+    }
+  }
+}

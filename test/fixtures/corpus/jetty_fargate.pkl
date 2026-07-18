@@ -1,0 +1,46 @@
+// Ported from aws-samples/aws-containers-task-definitions jetty/jetty_fargate.json
+amends "../../../pkl/EcsSchema.pkl"
+
+// See nginx_fargate.pkl for why logConfiguration.options needs a converter.
+output {
+  renderer = new JsonRenderer {
+    converters {
+      ["logConfiguration.options"] = (_) -> new Mapping {
+        ["awslogs-group"] = "/ecs/jetty"
+        ["awslogs-region"] = "us-east-1"
+        ["awslogs-stream-prefix"] = "ecs"
+      }
+    }
+  }
+}
+
+memory = "1024"
+networkMode = "awsvpc"
+cpu = "512"
+family = "jetty"
+requiresCompatibilities { "FARGATE" }
+
+containerDefinitions {
+  new {
+    portMappings {
+      new {
+        hostPort = 8080
+        containerPort = 8080
+        protocol = "tcp"
+      }
+      new {
+        hostPort = 8443
+        containerPort = 8443
+        protocol = "tcp"
+      }
+    }
+    essential = true
+    name = "jetty"
+    image = "jetty"
+    logConfiguration {
+      logDriver = "awslogs"
+    }
+    cpu = 512
+    memoryReservation = 1024
+  }
+}

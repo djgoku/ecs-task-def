@@ -1,0 +1,40 @@
+// Ported from aws-samples/aws-containers-task-definitions nginx/nginx_ec2.json
+amends "../../../pkl/EcsSchema.pkl"
+
+// See nginx_fargate.pkl for why logConfiguration.options needs a converter.
+output {
+  renderer = new JsonRenderer {
+    converters {
+      ["logConfiguration.options"] = (_) -> new Mapping {
+        ["awslogs-group"] = "awslogs-nginx-ecs"
+        ["awslogs-region"] = "us-east-2"
+        ["awslogs-stream-prefix"] = "nginx"
+      }
+    }
+  }
+}
+
+family = "nginx"
+networkMode = "bridge"
+requiresCompatibilities { "EC2" }
+volumes {}
+placementConstraints {}
+
+containerDefinitions {
+  new {
+    name = "nginx"
+    image = "nginx:latest"
+    memory = 256
+    cpu = 256
+    essential = true
+    portMappings {
+      new {
+        containerPort = 80
+        protocol = "tcp"
+      }
+    }
+    logConfiguration {
+      logDriver = "awslogs"
+    }
+  }
+}

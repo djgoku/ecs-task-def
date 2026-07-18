@@ -1,0 +1,52 @@
+// Ported from aws-samples/aws-containers-task-definitions wildfly/wildfly_ec2.json
+amends "../../../pkl/EcsSchema.pkl"
+
+// See nginx_fargate.pkl for why logConfiguration.options needs a converter.
+output {
+  renderer = new JsonRenderer {
+    converters {
+      ["logConfiguration.options"] = (_) -> new Mapping {
+        ["awslogs-group"] = "/ecs/wildfly"
+        ["awslogs-region"] = "us-east-1"
+        ["awslogs-stream-prefix"] = "ecs"
+      }
+    }
+  }
+}
+
+memory = "1024"
+networkMode = "awsvpc"
+cpu = "512"
+family = "wildfly"
+
+containerDefinitions {
+  new {
+    cpu = 512
+    memory = 1024
+    portMappings {
+      new {
+        hostPort = 8080
+        containerPort = 8080
+        protocol = "tcp"
+      }
+      new {
+        hostPort = 9990
+        containerPort = 9990
+        protocol = "tcp"
+      }
+    }
+    essential = true
+    name = "wildfly"
+    image = "jboss/wildfly"
+    command {
+      "/opt/jboss/wildfly/bin/standalone.sh"
+      "-bmanagement"
+      "0.0.0.0"
+      "-b"
+      "0.0.0.0"
+    }
+    logConfiguration {
+      logDriver = "awslogs"
+    }
+  }
+}

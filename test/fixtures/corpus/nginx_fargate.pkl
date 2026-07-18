@@ -1,0 +1,53 @@
+// Ported from aws-samples/aws-containers-task-definitions nginx/nginx_fargate.json
+amends "../../../pkl/EcsSchema.pkl"
+
+// The upstream awslabs JSON schema documents `logConfiguration.options` (and
+// `dockerLabels`, `firelensConfiguration.options`, `dockerVolumeConfiguration`
+// .driverOpts/.labels) as `{"properties": {"insert-key": {"type": "string"}}}`
+// rather than via `additionalProperties` — a placeholder-key convention meant
+// for IDE display, not a real schema. pkl-gen-pkl transcribes that literally,
+// so the generated `Options` class has exactly one settable property, named
+// `insert-key`, and (being a closed, non-open class) cannot hold arbitrary
+// awslogs-group/awslogs-region-style keys through normal amending. A `output
+// .renderer.converters` path-spec entry substitutes the real Mapping content
+// at render time, after the surrounding document has already been
+// type-checked against EcsSchema — every other field here is still fully
+// schema-validated.
+output {
+  renderer = new JsonRenderer {
+    converters {
+      ["logConfiguration.options"] = (_) -> new Mapping {
+        ["awslogs-group"] = "awslogs-nginx-ecs"
+        ["awslogs-region"] = "us-east-1"
+        ["awslogs-stream-prefix"] = "ecs"
+      }
+    }
+  }
+}
+
+family = "nginx"
+networkMode = "awsvpc"
+requiresCompatibilities { "FARGATE" }
+cpu = "256"
+memory = "512"
+volumes {}
+placementConstraints {}
+
+containerDefinitions {
+  new {
+    name = "nginx"
+    image = "nginx:latest"
+    memory = 256
+    cpu = 256
+    essential = true
+    portMappings {
+      new {
+        containerPort = 80
+        protocol = "tcp"
+      }
+    }
+    logConfiguration {
+      logDriver = "awslogs"
+    }
+  }
+}

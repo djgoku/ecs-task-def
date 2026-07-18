@@ -1,0 +1,34 @@
+{
+    "containerDefinitions": [
+        {
+            "memory": 128,
+            "portMappings": [
+                {
+                    "hostPort": 80,
+                    "containerPort": 80,
+                    "protocol": "tcp"
+                }
+            ],
+            "essential": true,
+            "mountPoints": [
+                {
+                    "containerPath": "/usr/share/nginx/html",
+                    "sourceVolume": "efs-html"
+                }
+            ],
+            "name": "nginx",
+            "image": "public.ecr.aws/docker/library/nginx:latest"
+        }
+    ],
+    "volumes": [
+        {
+            "name": "efs-html",
+            "efsVolumeConfiguration": {
+                "fileSystemId": "fs-1324abcd",
+                "transitEncryption": "ENABLED"
+            }
+        }
+    ],
+    "family": "efs-tutorial",
+    "executionRoleArn":"arn:aws:iam::111122223333:role/ecsTaskExecutionRole"
+}
