@@ -84,4 +84,30 @@ defmodule EcsTaskDef.EnvFile do
   end
 
   defp strip_quotes(value), do: value
+
+  @doc """
+  Merge a parsed env-file map under the process environment.
+
+  Returns `{extra, shadow_warnings}` where `extra` is the list of {key, value}
+  pairs to append to the spawned process's environment (only keys the process
+  environment does not already define — process env wins), and
+  `shadow_warnings` describe keys defined on both sides with different values
+  (values are never included in the message).
+  """
+  def merge(file_map, sys_env, env_file_path) do
+    extra =
+      file_map
+      |> Enum.reject(fn {k, _v} -> Map.has_key?(sys_env, k) end)
+      |> Enum.sort()
+
+    warnings =
+      for {k, v} <- Enum.sort(file_map),
+          Map.has_key?(sys_env, k),
+          Map.fetch!(sys_env, k) != v do
+        "warning: #{k} is set in both the environment and #{env_file_path} " <>
+          "with different values; using the environment value"
+      end
+
+    {extra, warnings}
+  end
 end

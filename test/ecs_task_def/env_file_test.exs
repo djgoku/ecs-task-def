@@ -81,4 +81,33 @@ defmodule EcsTaskDef.EnvFileTest do
     assert {:error, message} = EnvFile.parse("/nonexistent/nope.env")
     assert message =~ "cannot read env file"
   end
+
+  describe "merge/3" do
+    test "file keys absent from process env are extra; present keys are skipped" do
+      {extra, warnings} =
+        EnvFile.merge(%{"NEW" => "a", "SHADOWED" => "file"}, %{"SHADOWED" => "env"}, ".env")
+
+      assert extra == [{"NEW", "a"}]
+      assert [warning] = warnings
+      assert warning =~ "SHADOWED is set in both the environment and .env"
+      assert warning =~ "using the environment value"
+      refute warning =~ "file"
+      refute warning =~ "env\""
+    end
+
+    test "identical values produce no warning" do
+      {extra, warnings} = EnvFile.merge(%{"SAME" => "x"}, %{"SAME" => "x"}, ".env")
+      assert extra == []
+      assert warnings == []
+    end
+
+    test "warnings never contain the differing values" do
+      {_, [warning]} =
+        EnvFile.merge(%{"SECRET" => "hunter2"}, %{"SECRET" => "hunter3"}, ".env.production")
+
+      refute warning =~ "hunter2"
+      refute warning =~ "hunter3"
+      assert warning =~ ".env.production"
+    end
+  end
 end
