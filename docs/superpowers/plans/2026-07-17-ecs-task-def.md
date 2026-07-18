@@ -98,7 +98,10 @@ defmodule EcsTaskDef.MixProject do
     [
       {:ex_json_schema, "~> 0.11.5"},
       {:nimble_options, "~> 1.1"},
-      {:burrito, "~> 1.5", runtime: false}
+      # NOT runtime: false — Burrito.Util.Args is called at runtime by
+      # EcsTaskDef.Application, and runtime: false deps are excluded from
+      # releases, which would crash the shipped binary.
+      {:burrito, "~> 1.5"}
     ]
   end
 
@@ -901,7 +904,7 @@ git commit -m "feat: atomic Output.write (temp + rename, cleanup on failure)"
 - Test: `test/ecs_task_def/preflight_test.exs`
 - Modify: `test/test_helper.exs`
 
-API contract: `check(env \\ System.get_env()) :: {:ok, pkl_path, version_string} | {:error, message}`. PATH lookup honors the passed env's `"PATH"` so tests can inject fixture dirs. Minimum version `0.31.0` (module attribute).
+API contract: `check(env \\ System.get_env()) :: {:ok, pkl_path, version_string} | {:error, message}`. PATH lookup honors the passed env's `"PATH"` so tests can inject fixture dirs. Minimum version `0.31.1` — per the spec, the minimum is the version the schema/codegen is tested against, which is the mise-pinned 0.31.1.
 
 - [ ] **Step 1: Create the fake pkl fixture script**
 
@@ -983,7 +986,7 @@ defmodule EcsTaskDef.PreflightTest do
     dir = fake_pkl_dir()
     assert {:error, message} = Preflight.check(%{"PATH" => dir, "FAKE_PKL_VERSION" => "0.25.0"})
     assert message =~ "0.25.0"
-    assert message =~ "0.31.0 or newer"
+    assert message =~ "0.31.1 or newer"
   end
 
   test "unparseable version output yields an error" do
@@ -1011,7 +1014,7 @@ defmodule EcsTaskDef.Preflight do
   and actionable.
   """
 
-  @minimum "0.31.0"
+  @minimum "0.31.1"
 
   def minimum_version, do: @minimum
 
@@ -1385,9 +1388,10 @@ git commit -m "feat: mix ecs.regen_schema (pinned download + pantry codegen + --
 
 **Files:**
 - Create: `lib/ecs_task_def/scaffold.ex`
+- Create: `priv/templates/starter.pkl.eex`
 - Test: `test/ecs_task_def/scaffold_test.exs`
 
-API contract: `init(dir, vendor?) :: {:ok, [written_path]} | {:error, {:exists, [path]}}`. Default template amends the package URL pinned to the app's own version; `--vendor` writes `EcsSchema.pkl` beside it and amends `"EcsSchema.pkl"`.
+API contract: `init(dir, vendor?) :: {:ok, [written_path]} | {:error, {:exists, [path]}} | {:error, {:write_failed, path, posix_reason}}`. Default template amends the package URL pinned to the app's own version; `--vendor` writes `EcsSchema.pkl` beside it and amends `"EcsSchema.pkl"`. A missing DIR is created (`mkdir_p`); any OS-level write failure maps to `{:write_failed, …}` (the CLI renders it as exit 6 with `:file.format_error/1`). The starter template is an embedded `priv/` asset (EEx), per the spec's Architecture section.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1433,6 +1437,20 @@ defmodule EcsTaskDef.ScaffoldTest do
     refute File.exists?(Path.join(dir, "mytask.pkl"))
     assert File.read!(Path.join(dir, "EcsSchema.pkl")) == "existing"
   end
+
+  test "a missing target directory is created", %{dir: dir} do
+    nested = Path.join([dir, "a", "b"])
+    assert {:ok, [task_path]} = Scaffold.init(nested, false)
+    assert File.exists?(task_path)
+  end
+
+  test "an unwritable target maps to {:write_failed, path, reason}", %{dir: dir} do
+    blocker = Path.join(dir, "blocked")
+    # a FILE where the target dir should be -> mkdir_p fails with :eexist/:enotdir
+    File.write!(blocker, "i am a file")
+    assert {:error, {:write_failed, ^blocker, reason}} = Scaffold.init(blocker, false)
+    assert is_atom(reason)
+  end
 end
 ```
 
@@ -1443,6 +1461,35 @@ Expected: FAIL — `EcsTaskDef.Scaffold` undefined.
 
 - [ ] **Step 3: Implement**
 
+Create `priv/templates/starter.pkl.eex`:
+
+```
+<%= @amends_line %>
+
+family = "my-app"
+networkMode = "awsvpc"
+requiresCompatibilities { "FARGATE" }
+cpu = "256"
+memory = "512"
+
+containerDefinitions {
+  new {
+    name = "web"
+    image = "\(read("env:ECR_REPO")):\(read("env:IMAGE_TAG"))"
+    essential = true
+    portMappings {
+      new {
+        containerPort = 8080
+        protocol = "tcp"
+      }
+    }
+  }
+}
+```
+
+(Note: this is the raw file — the `\(…)` Pkl interpolations are literal here;
+only `<%= @amends_line %>` is EEx.)
+
 Create `lib/ecs_task_def/scaffold.ex`:
 
 ```elixir
@@ -1450,7 +1497,8 @@ defmodule EcsTaskDef.Scaffold do
   @moduledoc """
   `init` scaffolding. Writes a starter mytask.pkl (and, with vendor: true, the
   embedded EcsSchema.pkl). Never overwrites: any pre-existing target aborts the
-  whole scaffold before anything is written.
+  whole scaffold before anything is written. A missing target directory is
+  created; OS-level write failures surface as {:write_failed, path, reason}.
   """
 
   @package_base "package://pkg.pkl-lang.org/github.com/djgoku/aws-ecs-task-definition-generator/ecs-task-def"
@@ -1459,23 +1507,42 @@ defmodule EcsTaskDef.Scaffold do
     files = files(dir, vendor?)
     existing = for {path, _} <- files, File.exists?(path), do: path
 
-    if existing == [] do
-      for {path, contents} <- files, do: File.write!(path, contents)
-      {:ok, Enum.map(files, &elem(&1, 0))}
-    else
-      {:error, {:exists, existing}}
+    cond do
+      existing != [] ->
+        {:error, {:exists, existing}}
+
+      true ->
+        case File.mkdir_p(dir) do
+          :ok -> write_all(files)
+          {:error, reason} -> {:error, {:write_failed, dir, reason}}
+        end
     end
   end
 
+  defp write_all(files) do
+    Enum.reduce_while(files, {:ok, []}, fn {path, contents}, {:ok, written} ->
+      case File.write(path, contents) do
+        :ok -> {:cont, {:ok, written ++ [path]}}
+        {:error, reason} -> {:halt, {:error, {:write_failed, path, reason}}}
+      end
+    end)
+  end
+
   defp files(dir, false) do
-    [{Path.join(dir, "mytask.pkl"), starter_template(package_amends())}]
+    [{Path.join(dir, "mytask.pkl"), render_starter(package_amends())}]
   end
 
   defp files(dir, true) do
     [
-      {Path.join(dir, "mytask.pkl"), starter_template(~s(amends "EcsSchema.pkl"))},
-      {Path.join(dir, "EcsSchema.pkl"), File.read!(embedded_schema_pkl())}
+      {Path.join(dir, "mytask.pkl"), render_starter(~s(amends "EcsSchema.pkl"))},
+      {Path.join(dir, "EcsSchema.pkl"), File.read!(priv_path("EcsSchema.pkl"))}
     ]
+  end
+
+  defp render_starter(amends_line) do
+    priv_path("templates/starter.pkl.eex")
+    |> File.read!()
+    |> EEx.eval_string(assigns: [amends_line: amends_line])
   end
 
   defp package_amends do
@@ -1483,46 +1550,20 @@ defmodule EcsTaskDef.Scaffold do
     ~s(amends "#{@package_base}@#{version}#/EcsSchema.pkl")
   end
 
-  defp embedded_schema_pkl, do: Path.join(:code.priv_dir(:ecs_task_def), "EcsSchema.pkl")
-
-  defp starter_template(amends_line) do
-    """
-    #{amends_line}
-
-    family = "my-app"
-    networkMode = "awsvpc"
-    requiresCompatibilities { "FARGATE" }
-    cpu = "256"
-    memory = "512"
-
-    containerDefinitions {
-      new {
-        name = "web"
-        image = "\\(read("env:ECR_REPO")):\\(read("env:IMAGE_TAG"))"
-        essential = true
-        portMappings {
-          new {
-            containerPort = 8080
-            protocol = "tcp"
-          }
-        }
-      }
-    }
-    """
-  end
+  defp priv_path(rel), do: Path.join(:code.priv_dir(:ecs_task_def), rel)
 end
 ```
 
 - [ ] **Step 4: Run to verify pass**
 
 Run: `mix test test/ecs_task_def/scaffold_test.exs`
-Expected: PASS (3 tests).
+Expected: PASS (5 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add lib/ecs_task_def/scaffold.ex test/ecs_task_def/scaffold_test.exs
-git commit -m "feat: Scaffold init (package-URL default, --vendor local copy, never overwrites)"
+git add lib/ecs_task_def/scaffold.ex priv/templates/starter.pkl.eex test/ecs_task_def/scaffold_test.exs
+git commit -m "feat: Scaffold init (priv template, package-URL default, --vendor, never overwrites, write-failure mapping)"
 ```
 
 ---
@@ -1573,11 +1614,20 @@ defmodule EcsTaskDef.CLITest do
     assert err =~ "init"
   end
 
-  test "unknown flag suggests the nearest real one" do
+  test "unknown flag suggests the nearest real one and prints usage" do
     {code, err} = run_with_env(["generate", "in.pkl", "--ouput", "x"], %{"PATH" => "/nonexistent"})
     assert code == 1
     assert err =~ "unknown option --ouput"
     assert err =~ "did you mean --output?"
+    assert err =~ "Usage:"
+  end
+
+  test "generate --help and init --help print usage and exit 0" do
+    for argv <- [["generate", "--help"], ["init", "--help"]] do
+      stdout = capture_io(fn -> send(self(), {:code, CLI.run(argv, %{"PATH" => "/nonexistent"})}) end)
+      assert_received {:code, 0}
+      assert stdout =~ "Usage:"
+    end
   end
 
   test "missing pkl exits 2 with install hint" do
@@ -1708,6 +1758,12 @@ defmodule EcsTaskDef.CLI do
   @moduledoc """
   argv → exit code. All human output goes to stderr; the generated JSON is the
   only thing written to stdout (when --output is not given).
+
+  Environment semantics of run/2: the env map is consulted for PATH lookup and
+  for merge/shadow decisions against the --env-file. The spawned pkl child
+  always inherits the REAL process environment plus the env-file extras —
+  so tests that need a variable visible to pkl must System.put_env it (see
+  Task 12 integration tests), not merely pass it in the map.
   """
 
   alias EcsTaskDef.{EnvFile, Output, Pkl, Preflight, Scaffold, SchemaPin, Validator}
@@ -1855,6 +1911,10 @@ defmodule EcsTaskDef.CLI do
           Enum.each(paths, fn p -> IO.puts(:stderr, "  " <> p) end)
           error("move them aside or run init in an empty directory")
           6
+
+        {:error, {:write_failed, path, reason}} ->
+          error("cannot write #{path}: #{:file.format_error(reason)}")
+          6
       end
     else
       {:exit, code} -> code
@@ -1865,9 +1925,15 @@ defmodule EcsTaskDef.CLI do
 
   # arity: 1 = exactly one positional; {0, 1} = zero or one positional
   defp parse(args, nimble_schema, strict, aliases, arity) do
+    strict = Keyword.put(strict, :help, :boolean)
+    aliases = Keyword.put(aliases, :h, :help)
     {opts, positional, invalid} = OptionParser.parse(args, strict: strict, aliases: aliases)
 
     cond do
+      opts[:help] ->
+        usage(:stdio)
+        {:exit, 0}
+
       invalid != [] ->
         {flag, _} = hd(invalid)
         usage_error_exit("unknown option #{flag}#{suggestion(flag)}")
@@ -1879,7 +1945,7 @@ defmodule EcsTaskDef.CLI do
         usage_error_exit("expected at most one DIR argument, got #{length(positional)}")
 
       true ->
-        case NimbleOptions.validate(opts, nimble_schema) do
+        case NimbleOptions.validate(Keyword.delete(opts, :help), nimble_schema) do
           {:ok, validated} ->
             {:ok, List.first(positional), validated}
 
@@ -1898,8 +1964,10 @@ defmodule EcsTaskDef.CLI do
     if distance > 0.7, do: ", did you mean #{best}?", else: ""
   end
 
+  # Spec exit-1 contract: usage errors always show usage + suggestion.
   defp usage_error_exit(message) do
     error(message)
+    usage(:stderr)
     {:exit, 1}
   end
 
@@ -1932,7 +2000,7 @@ end
 - [ ] **Step 4: Run to verify pass**
 
 Run: `mix test test/ecs_task_def/cli_test.exs`
-Expected: PASS (10 tests). Two likely adjustment points, fix implementation not tests: (a) `usage_error/1` for bare `run([])` must both print usage and return 1; (b) `:binary.match/2` returns `{pos, len}` tuples — tuple comparison gives header-before-stderr ordering correctly.
+Expected: PASS (11 tests). Two likely adjustment points, fix implementation not tests: (a) `usage_error/1` for bare `run([])` must both print usage and return 1; (b) `:binary.match/2` returns `{pos, len}` tuples — tuple comparison gives header-before-stderr ordering correctly.
 
 - [ ] **Step 5: Run the whole suite**
 
@@ -1948,11 +2016,16 @@ git commit -m "feat: CLI with NimbleOptions-validated commands, staged pipeline,
 
 ---
 
-### Task 12: End-to-end integration tests (real pkl)
+### Task 12: End-to-end integration tests (real pkl) — every error-table row
 
 **Files:**
 - Create: `test/integration/generate_test.exs`
-- Create: `test/fixtures/starter_golden.json`
+
+Env-propagation contract (important): the spawned pkl child inherits the REAL
+process environment plus env-file extras. `CLI.run/2`'s env map does NOT feed
+the child — so these tests set pkl-visible variables with `System.put_env/2`
+(cleaned up via `on_exit`) and use the env map only for PATH manipulation.
+This file is NOT `async: true` (it mutates the process environment).
 
 - [ ] **Step 1: Write the integration tests**
 
@@ -1960,7 +2033,7 @@ Create `test/integration/generate_test.exs`:
 
 ```elixir
 defmodule EcsTaskDef.Integration.GenerateTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: false
   import ExUnit.CaptureIO
 
   alias EcsTaskDef.CLI
@@ -1974,29 +2047,30 @@ defmodule EcsTaskDef.Integration.GenerateTest do
     %{dir: dir}
   end
 
-  defp real_env(extra \\ %{}) do
-    Map.merge(System.get_env(), extra)
+  defp put_env!(map) do
+    for {k, v} <- map, do: System.put_env(k, v)
+    on_exit(fn -> for {k, _} <- map, do: System.delete_env(k) end)
   end
 
+  defp run(argv) do
+    stderr = capture_io(:stderr, fn -> send(self(), {:code, CLI.run(argv, System.get_env())}) end)
+    assert_received {:code, code}
+    {code, stderr}
+  end
+
+  defp scaffold_vendor!(dir) do
+    {0, _} = run(["init", dir, "--vendor"])
+  end
+
+  # exit 0 — happy path
   test "init --vendor then generate produces valid JSON end to end", %{dir: dir} do
-    capture_io(:stderr, fn ->
-      assert CLI.run(["init", dir, "--vendor"], real_env()) == 0
-    end)
+    scaffold_vendor!(dir)
+    put_env!(%{"ECR_REPO" => "123.dkr.ecr.us-east-1.amazonaws.com/web", "IMAGE_TAG" => "v1"})
 
     out = Path.join(dir, "task.json")
+    {code, stderr} = run(["generate", Path.join(dir, "mytask.pkl"), "-o", out])
 
-    stderr =
-      capture_io(:stderr, fn ->
-        code =
-          CLI.run(
-            ["generate", Path.join(dir, "mytask.pkl"), "-o", out],
-            real_env(%{"ECR_REPO" => "123.dkr.ecr.us-east-1.amazonaws.com/web", "IMAGE_TAG" => "v1"})
-          )
-
-        send(self(), {:code, code})
-      end)
-
-    assert_received {:code, 0}
+    assert code == 0
     assert stderr =~ "✓ evaluated"
     doc = out |> File.read!() |> JSON.decode!()
     assert doc["family"] == "my-app"
@@ -2004,75 +2078,104 @@ defmodule EcsTaskDef.Integration.GenerateTest do
     assert :ok = EcsTaskDef.Validator.validate(doc)
   end
 
-  test "missing env var: exit 4 and pkl's file:line error surfaces", %{dir: dir} do
-    capture_io(:stderr, fn ->
-      assert CLI.run(["init", dir, "--vendor"], real_env()) == 0
-    end)
-
-    stderr =
-      capture_io(:stderr, fn ->
-        code =
-          CLI.run(
-            ["generate", Path.join(dir, "mytask.pkl")],
-            real_env(%{"ECR_REPO" => "repo"}) |> Map.delete("IMAGE_TAG")
-          )
-
-        send(self(), {:code, code})
-      end)
-
-    assert_received {:code, 4}
-    assert stderr =~ "Cannot find resource `env:IMAGE_TAG`"
-    assert stderr =~ "mytask.pkl"
+  # exit 1 — usage error
+  test "unknown flag exits 1 with usage and suggestion", %{dir: dir} do
+    {code, stderr} = run(["generate", Path.join(dir, "x.pkl"), "--ouput", "y"])
+    assert code == 1
+    assert stderr =~ "did you mean --output?"
+    assert stderr =~ "Usage:"
   end
 
+  # exit 2 — pkl missing (env map PATH is authoritative for preflight)
+  test "missing pkl exits 2 with install hint", %{dir: dir} do
+    stderr =
+      capture_io(:stderr, fn ->
+        send(self(), {:code, CLI.run(["generate", Path.join(dir, "x.pkl")], %{"PATH" => "/nonexistent"})})
+      end)
+
+    assert_received {:code, 2}
+    assert stderr =~ "pkl not found on PATH"
+    assert stderr =~ "brew install pkl"
+  end
+
+  # exit 3 — malformed env file
+  test "malformed env file exits 3 with file:line", %{dir: dir} do
+    scaffold_vendor!(dir)
+    env_file = Path.join(dir, ".env")
+    File.write!(env_file, "FOO=ok\nnot a pair\n")
+
+    {code, stderr} = run(["generate", Path.join(dir, "mytask.pkl"), "--env-file", env_file])
+    assert code == 3
+    assert stderr =~ "#{env_file}:2:"
+  end
+
+  # exit 4 — pkl eval failure (missing env var), header before pkl stderr
+  test "missing env var: exit 4 and pkl's file:line error surfaces", %{dir: dir} do
+    scaffold_vendor!(dir)
+    put_env!(%{"ECR_REPO" => "repo"})
+    System.delete_env("IMAGE_TAG")
+
+    {code, stderr} = run(["generate", Path.join(dir, "mytask.pkl")])
+    assert code == 4
+    assert stderr =~ "pkl eval failed"
+    assert stderr =~ "Cannot find resource `env:IMAGE_TAG`"
+    assert stderr =~ "mytask.pkl"
+    assert :binary.match(stderr, "pkl eval failed") < :binary.match(stderr, "Cannot find resource")
+  end
+
+  # exit 4 variant — typo'd field caught by the typed module
+  test "typo'd field in the template fails eval with the field name", %{dir: dir} do
+    scaffold_vendor!(dir)
+    put_env!(%{"ECR_REPO" => "r", "IMAGE_TAG" => "t"})
+
+    task = Path.join(dir, "mytask.pkl")
+    File.write!(task, String.replace(File.read!(task), "networkMode", "networkMoode"))
+
+    {code, stderr} = run(["generate", task])
+    assert code == 4
+    assert stderr =~ "networkMoode"
+  end
+
+  # exit 5 — schema validation failure (free-form pkl bypasses the typed module)
+  test "schema-invalid output exits 5 listing violations", %{dir: dir} do
+    freeform = Path.join(dir, "freeform.pkl")
+    File.write!(freeform, "cpu = 256\n")
+
+    {code, stderr} = run(["generate", freeform])
+    assert code == 5
+    assert stderr =~ "schema validation failed"
+    assert stderr =~ "cpu: Type mismatch"
+    assert stderr =~ "family"
+  end
+
+  # exit 6 — cannot write output
+  test "unwritable output path exits 6 with the path and OS reason", %{dir: dir} do
+    scaffold_vendor!(dir)
+    put_env!(%{"ECR_REPO" => "r", "IMAGE_TAG" => "t"})
+
+    bad_out = Path.join([dir, "no-such-dir", "out.json"])
+    {code, stderr} = run(["generate", Path.join(dir, "mytask.pkl"), "-o", bad_out])
+    assert code == 6
+    assert stderr =~ "cannot write #{bad_out}"
+  end
+
+  # env-file precedence + shadow warning end to end
   test "env file supplies defaults; real env wins with shadow warning", %{dir: dir} do
-    capture_io(:stderr, fn ->
-      assert CLI.run(["init", dir, "--vendor"], real_env()) == 0
-    end)
+    scaffold_vendor!(dir)
+    put_env!(%{"ECR_REPO" => "from-env"})
+    System.delete_env("IMAGE_TAG")
 
     env_file = Path.join(dir, ".env")
     File.write!(env_file, "ECR_REPO=from-file\nIMAGE_TAG=file-tag\n")
 
     out = Path.join(dir, "task.json")
+    {code, stderr} = run(["generate", Path.join(dir, "mytask.pkl"), "-o", out, "--env-file", env_file])
 
-    stderr =
-      capture_io(:stderr, fn ->
-        code =
-          CLI.run(
-            ["generate", Path.join(dir, "mytask.pkl"), "-o", out, "--env-file", env_file],
-            real_env(%{"ECR_REPO" => "from-env"}) |> Map.delete("IMAGE_TAG")
-          )
-
-        send(self(), {:code, code})
-      end)
-
-    assert_received {:code, 0}
+    assert code == 0
     assert stderr =~ "warning: ECR_REPO is set in both the environment and #{env_file}"
+    refute stderr =~ "from-file"
     doc = out |> File.read!() |> JSON.decode!()
     assert hd(doc["containerDefinitions"])["image"] == "from-env:file-tag"
-  end
-
-  test "typo'd field in the template fails eval with the field name", %{dir: dir} do
-    capture_io(:stderr, fn ->
-      assert CLI.run(["init", dir, "--vendor"], real_env()) == 0
-    end)
-
-    task = Path.join(dir, "mytask.pkl")
-    File.write!(task, String.replace(File.read!(task), "networkMode", "networkMoode"))
-
-    stderr =
-      capture_io(:stderr, fn ->
-        code =
-          CLI.run(
-            ["generate", task],
-            real_env(%{"ECR_REPO" => "r", "IMAGE_TAG" => "t"})
-          )
-
-        send(self(), {:code, code})
-      end)
-
-    assert_received {:code, 4}
-    assert stderr =~ "networkMoode"
   end
 end
 ```
@@ -2080,13 +2183,13 @@ end
 - [ ] **Step 2: Run with real pkl**
 
 Run: `mix test test/integration/generate_test.exs`
-Expected: PASS (4 tests). Watch for: the vendored `amends "EcsSchema.pkl"` resolves relative to `mytask.pkl`'s directory — pkl resolves relative module URIs against the importing module's location, which is why `init` writes them side by side.
+Expected: PASS (9 tests — every exit-code row 0–6 asserted with real pkl, plus the typo and precedence variants). Watch for: the vendored `amends "EcsSchema.pkl"` resolves relative to `mytask.pkl`'s directory — pkl resolves relative module URIs against the importing module's location, which is why `init` writes them side by side.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add test/integration/generate_test.exs
-git commit -m "test: end-to-end integration coverage (happy path, env precedence, eval failures)"
+git commit -m "test: end-to-end integration coverage for every exit-code row plus env precedence"
 ```
 
 ---
@@ -2223,23 +2326,69 @@ Expected: PASS. If the map comparison fails, diff the two decoded maps — likel
 
 For each remaining source file, apply exactly the Step-1→Step-4 procedure (fetch → save as `test/fixtures/corpus/<name>.golden.json` verbatim → hand-port to `<name>.pkl` amending `../../../pkl/EcsSchema.pkl` with the same field-by-field translation rules: top-level `cpu`/`memory` are strings, container-level are ints, string-keyed maps use `["key"] = value` Mapping syntax, arrays use `Listing { new { … } }`, empty arrays present in the source become explicit empty listings). The data-driven corpus test picks each pair up automatically — no test-code changes.
 
-Sources to port (all from `aws-samples/aws-containers-task-definitions`, raw URLs follow the nginx pattern):
+Sources to port — the **complete** aws-samples corpus (all 7 apps × both variants; raw URLs follow the nginx pattern `https://raw.githubusercontent.com/aws-samples/aws-containers-task-definitions/master/<app>/<file>`):
 
-- `nginx/nginx_ec2.json`
-- `tomcat/tomcat_ec2.json`
-- `gunicorn/gunicorn_fargate.json`
-- one EFS-volume example from the AWS developer-guide page
-  `https://docs.aws.amazon.com/AmazonECS/latest/developerguide/example_task_definitions.html`
-  (copy the JSON into the golden file verbatim; name the pair `docs_efs`)
+- `nginx/nginx_ec2.json` (nginx_fargate already done in Steps 1–4)
+- `consul/consul_ec2.json`, `consul/consul_fargate.json`
+- `gunicorn/gunicorn_ec2.json`, `gunicorn/gunicorn_fargate.json`
+- `jetty/jetty_ec2.json`, `jetty/jetty_fargate.json`
+- `kibana/kibana_ec2.json`, `kibana/kibana_fargate.json`
+- `tomcat/tomcat_ec2.json`, `tomcat/tomcat_fargate.json`
+- `wildfly/wildfly_ec2.json`, `wildfly/wildfly_fargate.json`
+
+(If a listed file turns out not to exist under exactly that name, `curl` the
+directory listing via the GitHub API — `gh api repos/aws-samples/aws-containers-task-definitions/contents/<app>` —
+and port whatever `*_ec2.json` / `*_fargate.json` files are actually there.)
+
+Plus from the AWS developer-guide page
+`https://docs.aws.amazon.com/AmazonECS/latest/developerguide/example_task_definitions.html`:
+
+- one EFS-volume example (name the pair `docs_efs`)
+- one Windows/awslogs example if present (name the pair `docs_awslogs`)
 
 Run after each port: `mix test test/integration/corpus_test.exs`
 Expected: one more passing test per pair.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Add the check-jsonschema PR #512 seed fixtures (positive + negative)**
+
+Fetch the two fixtures from the PR branch (they exist only there — the PR was
+closed unmerged; copy, don't reference):
+
+Run:
 
 ```bash
-git add test/fixtures/corpus test/integration/corpus_test.exs
-git commit -m "test: AWS-authored task-definition corpus with golden comparisons"
+gh api repos/python-jsonschema/check-jsonschema/pulls/512 --jq '.head.repo.full_name + " " + .head.ref'
+# then, with OWNER/REPO and BRANCH from the output:
+curl -fsSL "https://raw.githubusercontent.com/OWNER/REPO/BRANCH/tests/example-files/hooks/positive/amazon-ecs-intellisense-schema/fargate.json" \
+  -o test/fixtures/corpus/pr512_fargate.golden.json
+curl -fsSL "https://raw.githubusercontent.com/OWNER/REPO/BRANCH/tests/example-files/hooks/negative/amazon-ecs-intellisense-schema/invalid.json" \
+  -o test/fixtures/negative/pr512_invalid.json
+```
+
+Port `pr512_fargate` to Pkl with the Step-5 recipe (data-driven test picks it
+up). The negative fixture gets its own test — append to
+`test/integration/corpus_test.exs` (inside the module, after the `for` block):
+
+```elixir
+  test "negative fixture pr512_invalid is rejected by the validator" do
+    doc =
+      Path.expand("../fixtures/negative/pr512_invalid.json", __DIR__)
+      |> File.read!()
+      |> JSON.decode!()
+
+    assert {:error, lines} = EcsTaskDef.Validator.validate(doc)
+    assert lines != []
+  end
+```
+
+Run: `mix test test/integration/corpus_test.exs`
+Expected: all corpus tests plus the negative test pass.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add test/fixtures test/integration/corpus_test.exs
+git commit -m "test: complete AWS-authored corpus (aws-samples x14, AWS docs, PR512 seeds) with golden + negative coverage"
 ```
 
 ---
@@ -2381,6 +2530,36 @@ package {
 Run: `cd pkl && pkl project package && ls .out/ && cd ..`
 Expected: `.out/ecs-task-def@0.1.0/` containing `ecs-task-def@0.1.0` (metadata JSON), `ecs-task-def@0.1.0.zip`, and `.sha256` checksum files. Add `pkl/.out/` to `.gitignore`.
 
+- [ ] **Step 1b: Enforce PklProject ↔ mix.exs version lockstep with a unit test**
+
+The default `init` scaffold pins its package URL to the binary's own version,
+so a drifting PklProject version would produce scaffolds pointing at a
+nonexistent release. Guard it:
+
+Create `test/ecs_task_def/version_lockstep_test.exs`:
+
+```elixir
+defmodule EcsTaskDef.VersionLockstepTest do
+  use ExUnit.Case, async: true
+
+  test "pkl/PklProject version matches the mix project version" do
+    mix_version = Application.spec(:ecs_task_def, :vsn) |> to_string()
+
+    pkl_project = File.read!(Path.expand("../../pkl/PklProject", __DIR__))
+    [_, pkl_version] = Regex.run(~r/version = "([^"]+)"/, pkl_project)
+
+    assert pkl_version == mix_version,
+           "pkl/PklProject version (#{pkl_version}) must match mix.exs (#{mix_version}); " <>
+             "bump both together when releasing"
+  end
+end
+```
+
+Run: `mix test test/ecs_task_def/version_lockstep_test.exs`
+Expected: PASS. (Deliberately no failing-first step — this is a consistency
+guard over two committed files, not new behavior; verify it goes red by
+temporarily editing the PklProject version, then restore.)
+
 - [ ] **Step 2: Write the release workflow**
 
 Create `.github/workflows/release.yml`:
@@ -2453,8 +2632,8 @@ Expected: `yaml ok`
 
 ```bash
 echo "pkl/.out/" >> .gitignore
-git add pkl/PklProject .github/workflows/release.yml .gitignore
-git commit -m "release: PklProject metadata and tag-driven release workflow (binaries + pkl package)"
+git add pkl/PklProject .github/workflows/release.yml .gitignore test/ecs_task_def/version_lockstep_test.exs
+git commit -m "release: PklProject metadata, version-lockstep guard, tag-driven release workflow"
 ```
 
 When the user wants the first release: `git tag ecs-task-def@0.1.0 && git push origin ecs-task-def@0.1.0`, watch the workflow, then verify the package URL resolves:
@@ -2474,6 +2653,26 @@ Expected: JSON on stdout (first run fetches the package, later runs hit pkl's ca
 
 ## Plan self-review notes (already applied)
 
-- Spec coverage: every spec section maps to a task — CLI contract (11), .env grammar (3–4), shadow warning (4, 12), Unicode fix (5), atomic writes (6), preflight (7), stderr framing (8, 11), pinning + regen + drift (2, 9), init detail (10, 12), corpus + cross-check (13, 15), mise commit (1, 15), package/release/tag format (16), exit codes (11, 12).
+- Spec coverage: every spec section maps to a task — CLI contract (11), .env grammar (3–4), shadow warning (4, 12), Unicode fix (5), atomic writes (6), preflight (7), stderr framing (8, 11), pinning + regen + drift (2, 9), init detail (10, 12), corpus + cross-check (13, 15), mise commit (1, 15), package/release/tag format + version lockstep (16), exit codes: unit rows in 11, real-pkl rows 0–6 in 12.
 - The `--vendor` amends line resolving relative to `mytask.pkl` is asserted by integration Task 12 test 1.
 - Deliberately not in this plan (spec "Out of scope"): `--register`, YAML output, bundling pkl, hand-extending the generated module.
+
+## External-review revisions (2026-07-17, second Codex pass)
+
+- Fixed genuine defects: Task 12 env vars now reach the pkl child via
+  `System.put_env` (the run/2 env map never feeds the child — documented in
+  the CLI moduledoc); burrito dep is no longer `runtime: false` (that would
+  exclude `Burrito.Util.Args` from the release); usage errors print usage +
+  suggestion; per-command `--help`; init write failures map to exit 6 with
+  the OS reason; missing DIR is created; pkl minimum is 0.31.1 (the tested
+  version); stray `starter_golden.json` reference removed.
+- Widened per review: Task 12 asserts every exit-code row against real pkl;
+  Task 13 ports the complete aws-samples corpus (7 apps × 2 variants), two
+  AWS-docs examples, and the PR #512 positive + negative seeds; Task 16 adds
+  a PklProject↔mix.exs version-lockstep test; starter template is a `priv/`
+  EEx asset.
+- Held with rationale (spec amended to match): `priv/schema.json` stays
+  pristine with `(*UTF)(*UCP)` applied at Validator load time — a baked-in
+  prefix would break check-jsonschema's ECMA regex engine in the CI
+  cross-check; preprocessing keys on `\p{` content rather than hardcoding
+  the two tags paths (robust to schema updates).

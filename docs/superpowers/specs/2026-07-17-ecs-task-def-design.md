@@ -65,9 +65,13 @@ generated JSON):
   non-ASCII tag keys (e.g. `"Ünïcode-Key_1"`). Prepending `(*UTF)(*UCP)` to
   the pattern string fixes matching even under a flag-less `Regex.compile!/1`
   (PCRE start-of-pattern verbs override compile options; proven directly).
-- **Decision:** when embedding the schema, preprocess the two `tags` patterns
-  with the `(*UTF)(*UCP)` prefix. Full pattern enforcement is retained — no
-  weakened validation, no fallback needed.
+- **Decision:** the embedded `priv/schema.json` stays **pristine** (byte-for-
+  byte the pinned awslabs file — required so ECMA-engine cross-checkers like
+  check-jsonschema can consume it directly in CI). The Validator applies the
+  `(*UTF)(*UCP)` prefix **at load time** to any pattern containing a Unicode
+  property escape (`\p{`) — currently exactly the two `tags` patterns, and
+  automatically any the schema grows later. Full pattern enforcement is
+  retained — no weakened validation, no fallback needed.
 - `check-jsonschema` (0.36.2) handles this schema as-is — its default regex
   mode uses an ECMA-compatible engine (the same handling demonstrated against
   this schema in
@@ -326,9 +330,9 @@ The repo currently contains only this spec. Implementation must produce:
    `ex_json_schema`, `nimble_options`, Burrito.
 2. Committed generated artifacts: `pkl/EcsSchema.pkl` + the pinned
    `schema.json`, with `mix ecs.regen_schema` and its CI drift check.
-3. Embedded `priv/` assets: schema (with the two `tags` patterns preprocessed
-   with `(*UTF)(*UCP)`), `EcsSchema.pkl` copy for `--vendor`, starter
-   template.
+3. Embedded `priv/` assets: the pristine pinned schema (`(*UTF)(*UCP)`
+   preprocessing happens at Validator load time — see Resolved risk),
+   `EcsSchema.pkl` copy for `--vendor`, starter template.
 4. `PklProject` metadata so `pkl project package` produces the package
    artifacts; release workflow attaching Burrito binaries per platform plus
    the package artifacts, on releases tagged `ecs-task-def@X.Y.Z`.
