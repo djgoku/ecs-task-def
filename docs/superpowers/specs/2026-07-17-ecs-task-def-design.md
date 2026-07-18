@@ -69,12 +69,13 @@ generated JSON):
   with the `(*UTF)(*UCP)` prefix. Full pattern enforcement is retained — no
   weakened validation, no fallback needed.
 - `check-jsonschema` (0.36.2) handles this schema as-is — its default regex
-  mode uses an ECMA-compatible engine, and its test suite includes fixtures
-  for this exact schema (contributed via
-  [check-jsonschema PR #512](https://github.com/python-jsonschema/check-jsonschema/pull/512)).
-  Proven locally against our generated output (valid → ok, invalid → correct
-  per-field errors), so the CI cross-check stands. Raw python-jsonschema
-  (which fails on these patterns) is not used anywhere.
+  mode uses an ECMA-compatible engine (the same handling demonstrated against
+  this schema in
+  [check-jsonschema PR #512](https://github.com/python-jsonschema/check-jsonschema/pull/512),
+  which was closed unmerged, so its ECS fixtures live only on that PR
+  branch). Proven locally against our generated output (valid → ok,
+  invalid → correct per-field errors), so the CI cross-check stands. Raw
+  python-jsonschema (which fails on these patterns) is not used anywhere.
 
 ## User experience
 
@@ -85,12 +86,13 @@ $ ecs-task-def init --vendor           # same, but copies EcsSchema.pkl into the
 $ ecs-task-def generate mytask.pkl --env-file .env.production -o taskdef.json
 ✓ pkl 0.31.1 found
 ✓ evaluated mytask.pkl
-✓ validated against ECS schema v1.4.0
+✓ validated against ECS schema v1.4.0 (awslabs@2abcd3f)
 wrote taskdef.json
 ```
 
 (The displayed schema version comes from the pinned awslabs schema's own
-description — see Distribution for pinning.)
+description, and the short SHA is the pinned awslabs commit — both derive
+from the single pin; see Distribution.)
 
 ### CLI contract
 
@@ -202,10 +204,26 @@ Because the file `amends` the typed module, typos and wrong types fail at
   redirect maps to `releases/download/<name>@<ver>/…`, so the GitHub release
   **tag must be `ecs-task-def@X.Y.Z`** (validated 2026-07-17). pkl caches
   downloaded packages, so evals are offline after first fetch.
-- `init` scaffolds the package-URL `amends` line by default (pinned to the
-  binary's own version); `init --vendor` writes the embedded copy of
-  `EcsSchema.pkl` into the user's project and points `amends` at it, for
-  air-gapped or fully pinned setups.
+- `init` behavior in detail:
+  - **Default:** writes `mytask.pkl` whose first line is
+    `amends "package://…/ecs-task-def@X.Y.Z#/EcsSchema.pkl"`, where `X.Y.Z`
+    is the running binary's own version — the scaffold is always pinned to
+    the schema the binary was built and tested with, never "latest". The
+    first `pkl eval` fetches the package over HTTPS (GitHub release via the
+    pkg.pkl-lang.org redirect) and caches it in pkl's package cache
+    (`~/.pkl/cache`); subsequent evals are offline. Checksums in the package
+    metadata make the fetch tamper-evident.
+  - **`--vendor`:** additionally writes the binary's embedded copy of
+    `EcsSchema.pkl` next to `mytask.pkl`, and the `amends` line is the
+    relative path `"EcsSchema.pkl"` instead of the package URL. No network,
+    ever; the schema is a visible, diffable, committed file in the user's
+    repo. This is the path for air-gapped hosts, hermetic CI, or teams that
+    want schema changes to show up in their own code review.
+  - **Upgrading** (either mode): rerun `init` with a newer binary in a clean
+    location (or delete the scaffolded files first — `init` never
+    overwrites), or hand-edit: bump the version in the `amends` URL, or
+    replace the vendored `EcsSchema.pkl`. The scaffold contains no other
+    version-coupled content.
 
 ## Architecture
 
@@ -278,11 +296,27 @@ style: location first, then what, then how to fix.
 - **Integration** (require real `pkl` on PATH; tagged to skip with a notice
   when absent): golden-file tests — fixture `.pkl` in, expected JSON out —
   plus one test per error-table row asserting exit code and message shape.
+- **Real-world fixture corpus** (researched 2026-07-17): port AWS-authored
+  task definitions into Pkl fixtures whose generated JSON is golden-compared
+  against the originals and schema-validated. Sources:
+  - [aws-samples/aws-containers-task-definitions](https://github.com/aws-samples/aws-containers-task-definitions)
+    (active repo; nginx, tomcat, consul, gunicorn, jetty, kibana, wildfly —
+    each with `*_ec2.json` and `*_fargate.json` variants).
+  - The AWS developer guide's
+    [example task definitions page](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/example_task_definitions.html).
+  - The negative/positive fixtures from
+    [check-jsonschema PR #512](https://github.com/python-jsonschema/check-jsonschema/pull/512)
+    (`fargate.json`, `invalid.json`) as additional seeds (PR branch only —
+    copy, don't reference).
+  This corpus exercises far more of the schema surface (EC2 + Fargate,
+  volumes, log configs, health checks) than hand-written minimal fixtures.
 - **CI cross-check**: every golden JSON is also validated with
   `check-jsonschema`; two independent validator implementations agreeing
   guards against bugs in either.
-- CI: Linux + macOS, `pkl` installed via mise; plus the regen-task drift
-  check (see Distribution).
+- CI: Linux + macOS; toolchain (erlang, elixir, pkl, zig-for-Burrito) comes
+  from the repo's committed `mise.toml` + `mise.lock` — CI and local dev
+  install identical pinned versions via mise. Plus the regen-task drift check
+  (see Distribution).
 
 ## Deliverables
 
@@ -298,7 +332,10 @@ The repo currently contains only this spec. Implementation must produce:
 4. `PklProject` metadata so `pkl project package` produces the package
    artifacts; release workflow attaching Burrito binaries per platform plus
    the package artifacts, on releases tagged `ecs-task-def@X.Y.Z`.
-5. Test suite + CI as specified under Testing.
+5. Test suite + CI as specified under Testing, including the ported
+   real-world fixture corpus.
+6. Committed `mise.toml` + `mise.lock` pinning the full toolchain (erlang,
+   elixir, pkl, zig for Burrito) for both local dev and CI.
 
 ## Out of scope (v1)
 
