@@ -192,11 +192,17 @@ defmodule EcsTaskDef.CLI do
 
       invalid != [] ->
         {flag, value} = hd(invalid)
+        known_type = Map.get(option_types(strict, aliases), flag)
 
-        if value == nil and Map.get(option_types(strict, aliases), flag) == :string do
-          usage_error_exit("option #{flag} requires a value")
-        else
-          usage_error_exit("unknown option #{flag}#{suggestion(flag)}")
+        cond do
+          value == nil and known_type == :string ->
+            usage_error_exit("option #{flag} requires a value")
+
+          known_type == nil and flag in @known_flags ->
+            usage_error_exit("option #{flag} is not valid for this command")
+
+          true ->
+            usage_error_exit("unknown option #{flag}#{suggestion(flag)}")
         end
 
       arity == 1 and length(positional) != 1 ->

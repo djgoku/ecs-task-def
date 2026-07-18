@@ -65,6 +65,26 @@ defmodule EcsTaskDef.CLITest do
     refute err =~ "requires a value"
   end
 
+  test "a flag valid for another command but not this one is rejected without a self-suggestion" do
+    {code, err} =
+      run_with_env(["generate", "in.pkl", "--vendor"], %{"PATH" => "/nonexistent"})
+
+    assert code == 1
+    assert err =~ "option --vendor is not valid for this command"
+    refute err =~ "did you mean --vendor?"
+    assert err =~ "Usage:"
+  end
+
+  test "init rejects generate-only flags without a self-suggestion", %{dir: dir} do
+    {code, err} =
+      run_with_env(["init", dir, "--output", "x"], %{"PATH" => "/nonexistent"})
+
+    assert code == 1
+    assert err =~ "option --output is not valid for this command"
+    refute err =~ "did you mean --output?"
+    assert err =~ "Usage:"
+  end
+
   test "generate --help and init --help print usage with the version line and exit 0" do
     version = Application.spec(:ecs_task_def, :vsn) |> to_string()
 
