@@ -51,4 +51,19 @@ defmodule EcsTaskDef.ScaffoldTest do
     assert {:error, {:write_failed, ^blocker, reason}} = Scaffold.init(blocker, false)
     assert is_atom(reason)
   end
+
+  test "a read-only target dir maps a File.write failure to {:write_failed, path, :eacces}", %{
+    dir: dir
+  } do
+    # the dir already exists, so mkdir_p succeeds; only the subsequent
+    # File.write of mytask.pkl inside it fails, exercising the write_all/1
+    # error branch (as opposed to the mkdir_p failure above).
+    locked = Path.join(dir, "locked")
+    File.mkdir_p!(locked)
+    File.chmod!(locked, 0o500)
+    on_exit(fn -> File.chmod(locked, 0o700) end)
+
+    task_path = Path.join(locked, "mytask.pkl")
+    assert {:error, {:write_failed, ^task_path, :eacces}} = Scaffold.init(locked, false)
+  end
 end

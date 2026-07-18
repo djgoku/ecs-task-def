@@ -1,9 +1,10 @@
 defmodule EcsTaskDef.Scaffold do
   @moduledoc """
-  `init` scaffolding. Writes a starter mytask.pkl (and, with vendor: true, the
-  embedded EcsSchema.pkl). Never overwrites: any pre-existing target aborts the
-  whole scaffold before anything is written. A missing target directory is
-  created; OS-level write failures surface as {:write_failed, path, reason}.
+  `init` scaffolding. Writes a starter mytask.pkl (and, when vendor? is true,
+  the embedded EcsSchema.pkl). Never overwrites: any pre-existing target
+  aborts the whole scaffold before anything is written. A missing target
+  directory is created; OS-level write failures surface as
+  {:write_failed, path, reason}.
   """
 
   @package_base "package://pkg.pkl-lang.org/github.com/djgoku/aws-ecs-task-definition-generator/ecs-task-def"
