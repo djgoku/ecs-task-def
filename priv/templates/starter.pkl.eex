@@ -1,0 +1,21 @@
+<%= @amends_line %>
+
+family = "my-app"
+networkMode = "awsvpc"
+requiresCompatibilities { "FARGATE" }
+cpu = "256"
+memory = "512"
+
+containerDefinitions {
+  new {
+    name = "web"
+    image = "\(read("env:ECR_REPO")):\(read("env:IMAGE_TAG"))"
+    essential = true
+    portMappings {
+      new {
+        containerPort = 8080
+        protocol = "tcp"
+      }
+    }
+  }
+}
