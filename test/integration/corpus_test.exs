@@ -39,8 +39,27 @@ defmodule EcsTaskDef.Integration.CorpusTest do
 
       assert drop_nulls(generated) == drop_nulls(golden)
       assert :ok = EcsTaskDef.Validator.validate(generated)
-      assert :ok = EcsTaskDef.Validator.validate(drop_nulls(golden))
+
+      # wildfly_fargate's raw golden carries a literal "ulimits": null that the
+      # pinned schema rejects (proven separately, below) and no Pkl port can
+      # reproduce (see drop_nulls above) — validate the normalized form here
+      # as the representable Pkl equivalent instead of masking the rejection.
+      golden_for_validation =
+        if unquote(name) == "wildfly_fargate", do: drop_nulls(golden), else: golden
+
+      assert :ok = EcsTaskDef.Validator.validate(golden_for_validation)
     end
+  end
+
+  test "raw wildfly_fargate golden (byte-verbatim upstream, literal \"ulimits\": null) is rejected by the schema" do
+    golden =
+      Path.join(@corpus_dir, "wildfly_fargate.golden.json")
+      |> File.read!()
+      |> JSON.decode!()
+
+    assert {:error,
+            ["containerDefinitions[0].ulimits: Type mismatch. Expected Array but got Null."]} =
+             EcsTaskDef.Validator.validate(golden)
   end
 
   test "negative fixture pr512_invalid is rejected by the validator" do
