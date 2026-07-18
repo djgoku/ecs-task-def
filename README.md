@@ -45,8 +45,28 @@ or too old.
 ### `ecs-task-def init [DIR] [--vendor]`
 
 Scaffolds a starter `mytask.pkl` in `DIR` (defaults to the current
-directory). The starter `amends` a versioned package URL, so the first
-`generate` fetches the schema module over HTTPS and pkl caches it locally
+directory).
+
+**Until the first tagged release exists, use `--vendor`.** It additionally
+writes a local `EcsSchema.pkl` next to `mytask.pkl`, which `amends` that
+file instead of a package URL — fully offline, no network fetch, and it
+works today with no dependency on a published release:
+
+```console
+$ ecs-task-def init --vendor
+created ./mytask.pkl
+created ./EcsSchema.pkl
+```
+
+Plain `init` (no `--vendor`) instead makes `mytask.pkl` `amends` the
+versioned package URL
+`package://pkg.pkl-lang.org/github.com/djgoku/aws-ecs-task-definition-generator/ecs-task-def@X.Y.Z#/EcsSchema.pkl`,
+where `X.Y.Z` is the running binary's version. That scaffold is created
+successfully right now, but the subsequent `generate` only succeeds once a
+matching `ecs-task-def@X.Y.Z` release has been published (see Releasing
+below) — until then `pkl eval` fails fetching the package zip over HTTPS
+(currently a 404, since no release exists yet). Once a release is published,
+the first `generate` fetches the schema over HTTPS and pkl caches it locally
 (offline after that):
 
 ```console
@@ -55,15 +75,8 @@ created ./mytask.pkl
 next: set your env vars and run `ecs-task-def generate ./mytask.pkl`
 ```
 
-`--vendor` additionally writes a local `EcsSchema.pkl` next to it, and
-`mytask.pkl` amends that file instead of the package URL — fully offline,
-no network fetch ever, good for air-gapped hosts or hermetic CI:
-
-```console
-$ ecs-task-def init --vendor
-created ./mytask.pkl
-created ./EcsSchema.pkl
-```
+`--vendor` remains useful after the first release too, for air-gapped hosts
+or hermetic CI that shouldn't depend on network access.
 
 `init` never overwrites: if any target file already exists it exits 6,
 lists the conflicting paths, and writes nothing.
@@ -145,12 +158,20 @@ sync with the pinned upstream schema:
 $ mix ecs.regen_schema --check
 ```
 
-Build a release binary for your local machine (output lands under
-`burrito_out/`):
+Build release binaries (output lands under `burrito_out/`). Left unset,
+`ECS_TASK_DEF_RELEASE_OS` builds **all four** Burrito targets (both CPU
+architectures, both macOS and Linux) in one `mix release` — it does not
+limit the build to your local machine:
 
 ```console
 $ MIX_ENV=prod mix release ecs_task_def --overwrite
 ```
+
+Set `ECS_TASK_DEF_RELEASE_OS=linux` or `=macos` to build only that OS's two
+CPU targets, matching what the release workflow's per-OS jobs do. The macOS
+targets need a Zig link path against an SDK with an `arm64-macos` slice;
+macOS 26's SDK ships only `arm64e-macos` and breaks that link, so the
+release workflow builds on `macos-15`, not `macos-26`.
 
 CI (`.github/workflows/ci.yml`) runs the same test suite and regen check on
 Linux and macOS, plus a `check-jsonschema` cross-validation of the golden
