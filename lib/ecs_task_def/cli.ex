@@ -198,6 +198,9 @@ defmodule EcsTaskDef.CLI do
           value == nil and known_type == :string ->
             usage_error_exit("option #{flag} requires a value")
 
+          known_type == :boolean and value != nil ->
+            usage_error_exit("option #{flag} does not take a value")
+
           known_type == nil and flag in @known_flags ->
             usage_error_exit("option #{flag} is not valid for this command")
 

@@ -75,6 +75,26 @@ defmodule EcsTaskDef.CLITest do
     assert err =~ "Usage:"
   end
 
+  test "a known boolean flag given a value is rejected without a self-suggestion", %{dir: dir} do
+    {code, err} = run_with_env(["init", dir, "--vendor=nope"], %{"PATH" => "/nonexistent"})
+
+    assert code == 1
+    assert err =~ "option --vendor does not take a value"
+    refute err =~ "did you mean --vendor?"
+    assert err =~ "Usage:"
+  end
+
+  test "--help given a value is rejected without a self-suggestion, on both commands" do
+    for argv <- [["generate", "in.pkl", "--help=nope"], ["init", "--help=nope"]] do
+      {code, err} = run_with_env(argv, %{"PATH" => "/nonexistent"})
+
+      assert code == 1
+      assert err =~ "option --help does not take a value"
+      refute err =~ "did you mean --help?"
+      assert err =~ "Usage:"
+    end
+  end
+
   test "init rejects generate-only flags without a self-suggestion", %{dir: dir} do
     {code, err} =
       run_with_env(["init", dir, "--output", "x"], %{"PATH" => "/nonexistent"})
