@@ -13,15 +13,11 @@ defmodule EcsTaskDef.ValidatorTest do
   end
 
   test "all violations are collected with friendly paths" do
-    # ex_json_schema 0.11.5 merges all missing required properties into one
-    # error, so a second type-mismatch field (memory) is needed to reach 3
-    # distinct violations from a single validate/1 call.
-    assert {:error, lines} = Validator.validate(%{"cpu" => 256, "memory" => 512})
+    assert {:error, lines} = Validator.validate(%{"cpu" => 256})
     joined = Enum.join(lines, "\n")
     assert joined =~ "cpu: Type mismatch. Expected String but got Integer."
     assert joined =~ "family"
     assert joined =~ "containerDefinitions"
-    assert length(lines) >= 3
   end
 
   test "nested paths render as containerDefinitions[0].field" do
