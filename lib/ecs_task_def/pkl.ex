@@ -12,7 +12,7 @@ defmodule EcsTaskDef.Pkl do
     stderr_file =
       Path.join(
         System.tmp_dir!(),
-        "ecs-task-def-stderr-#{System.unique_integer([:positive])}"
+        "ecs-task-def-stderr-#{System.pid()}-#{System.unique_integer([:positive])}"
       )
 
     try do
@@ -23,11 +23,7 @@ defmodule EcsTaskDef.Pkl do
           env: [{"ECS_TASK_DEF_STDERR_FILE", stderr_file} | extra_env]
         )
 
-      stderr =
-        case File.read(stderr_file) do
-          {:ok, contents} -> contents
-          {:error, _} -> ""
-        end
+      stderr = File.read!(stderr_file)
 
       if exit_code == 0 do
         {:ok, stdout, stderr}
