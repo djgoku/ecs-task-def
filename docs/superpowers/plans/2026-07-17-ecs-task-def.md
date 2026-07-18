@@ -1622,11 +1622,15 @@ defmodule EcsTaskDef.CLITest do
     assert err =~ "Usage:"
   end
 
-  test "generate --help and init --help print usage and exit 0" do
-    for argv <- [["generate", "--help"], ["init", "--help"]] do
+  test "generate --help and init --help print usage with the version line and exit 0" do
+    version = Application.spec(:ecs_task_def, :vsn) |> to_string()
+
+    for argv <- [["--help"], ["generate", "--help"], ["init", "--help"]] do
       stdout = capture_io(fn -> send(self(), {:code, CLI.run(argv, %{"PATH" => "/nonexistent"})}) end)
       assert_received {:code, 0}
       assert stdout =~ "Usage:"
+      assert stdout =~ "ecs-task-def #{version}"
+      assert stdout =~ "awslabs@#{EcsTaskDef.SchemaPin.short_sha()}"
     end
   end
 
@@ -1978,7 +1982,11 @@ defmodule EcsTaskDef.CLI do
   end
 
   defp usage(device) do
+    version = Application.spec(:ecs_task_def, :vsn) |> to_string()
+
     IO.puts(device, """
+    ecs-task-def #{version} — ECS schema #{Validator.schema_version()} (awslabs@#{SchemaPin.short_sha()})
+
     Usage:
       ecs-task-def generate INPUT.pkl [--output|-o PATH] [--env-file PATH]
       ecs-task-def init [DIR] [--vendor]

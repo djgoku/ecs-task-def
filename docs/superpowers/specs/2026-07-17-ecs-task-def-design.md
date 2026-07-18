@@ -102,7 +102,9 @@ from the single pin; see Distribution.)
 
 Both commands validate their parsed options against a per-command
 NimbleOptions schema (see Architecture); `--help` text derives from the same
-schemas via `NimbleOptions.docs/1`.
+schemas via `NimbleOptions.docs/1`, and its first line includes the
+ecs-task-def version plus the pinned schema identity (version + short SHA),
+so `ecs-task-def --help` is enough to answer "what am I running?".
 
 **`ecs-task-def generate INPUT.pkl [flags]`**
 
