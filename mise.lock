@@ -32,6 +32,13 @@ url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d
 checksum = "sha256:da26afacbc58d6f569d0921ff6825772220c734327f5f976c0c73bd0b7dd3cf8"
 url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.214/win32-x64/claude.exe"
 
+[[tools."conda:xz-tools"]]
+version = "5.8.3"
+backend = "conda:xz-tools"
+
+[tools."conda:xz-tools".options]
+channel = "conda-forge"
+
 [[tools.elixir]]
 version = "1.20.1-otp-29"
 backend = "core:elixir"
