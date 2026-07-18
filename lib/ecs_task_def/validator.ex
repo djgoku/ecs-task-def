@@ -11,8 +11,8 @@ defmodule EcsTaskDef.Validator do
 
   alias EcsTaskDef.SchemaPin
 
-  @doc "Validate a decoded task definition. :ok | {:error, [formatted_line]}"
-  def validate(doc) when is_map(doc) do
+  @doc "Validate a decoded JSON value. :ok | {:error, [formatted_line]}"
+  def validate(doc) do
     case ExJsonSchema.Validator.validate(resolved_schema(), doc) do
       :ok -> :ok
       {:error, errors} -> {:error, Enum.map(errors, &format_error/1)}

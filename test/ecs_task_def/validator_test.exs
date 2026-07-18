@@ -53,4 +53,11 @@ defmodule EcsTaskDef.ValidatorTest do
   test "schema_version parses the version from the schema description" do
     assert Validator.schema_version() =~ ~r/^v\d+\.\d+\.\d+$/
   end
+
+  test "non-object JSON values are rejected with a root type violation, not a crash" do
+    for doc <- [nil, [], 5, "x"] do
+      assert {:error, [line]} = Validator.validate(doc)
+      assert line =~ "Type mismatch. Expected Object but got"
+    end
+  end
 end

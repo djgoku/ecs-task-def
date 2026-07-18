@@ -32,23 +32,68 @@ defmodule EcsTaskDef.CLITest do
   end
 
   test "unknown flag suggests the nearest real one and prints usage" do
-    {code, err} = run_with_env(["generate", "in.pkl", "--ouput", "x"], %{"PATH" => "/nonexistent"})
+    {code, err} =
+      run_with_env(["generate", "in.pkl", "--ouput", "x"], %{"PATH" => "/nonexistent"})
+
     assert code == 1
     assert err =~ "unknown option --ouput"
     assert err =~ "did you mean --output?"
     assert err =~ "Usage:"
   end
 
+  test "known string option missing its value gets a specific error, no self-referential suggestion" do
+    {code, err} = run_with_env(["generate", "in.pkl", "--env-file"], %{"PATH" => "/nonexistent"})
+    assert code == 1
+    assert err =~ "option --env-file requires a value"
+    refute err =~ "did you mean --env-file?"
+    assert err =~ "Usage:"
+  end
+
+  test "known string option short alias missing its value gets a specific error" do
+    {code, err} = run_with_env(["generate", "in.pkl", "-o"], %{"PATH" => "/nonexistent"})
+    assert code == 1
+    assert err =~ "option -o requires a value"
+    refute err =~ "did you mean -o?"
+    assert err =~ "Usage:"
+  end
+
+  test "genuinely unknown option still gets the nearest-flag suggestion, not a requires-a-value error" do
+    {code, err} = run_with_env(["generate", "in.pkl", "--ouput"], %{"PATH" => "/nonexistent"})
+    assert code == 1
+    assert err =~ "unknown option --ouput"
+    assert err =~ "did you mean --output?"
+    refute err =~ "requires a value"
+  end
+
   test "generate --help and init --help print usage with the version line and exit 0" do
     version = Application.spec(:ecs_task_def, :vsn) |> to_string()
 
     for argv <- [["--help"], ["generate", "--help"], ["init", "--help"]] do
-      stdout = capture_io(fn -> send(self(), {:code, CLI.run(argv, %{"PATH" => "/nonexistent"})}) end)
+      stdout =
+        capture_io(fn -> send(self(), {:code, CLI.run(argv, %{"PATH" => "/nonexistent"})}) end)
+
       assert_received {:code, 0}
       assert stdout =~ "Usage:"
       assert stdout =~ "ecs-task-def #{version}"
       assert stdout =~ "awslabs@#{EcsTaskDef.SchemaPin.short_sha()}"
     end
+  end
+
+  test "--help renders real CLI flag spellings, not NimbleOptions internal atom keys" do
+    stdout =
+      capture_io(fn ->
+        send(self(), {:code, CLI.run(["--help"], %{"PATH" => "/nonexistent"})})
+      end)
+
+    assert_received {:code, 0}
+
+    for flag <- ["--output", "-o", "--env-file", "--vendor", "--help", "-h"] do
+      assert stdout =~ flag
+    end
+
+    refute stdout =~ "`:output`"
+    refute stdout =~ "`:env_file`"
+    refute stdout =~ "`:vendor`"
   end
 
   test "missing pkl exits 2 with install hint" do
@@ -78,7 +123,11 @@ defmodule EcsTaskDef.CLITest do
     File.write!(input, "irrelevant")
     System.put_env("FAKE_PKL_EXIT", "1")
     System.put_env("FAKE_PKL_STDERR", "-- Pkl Error --\nboom at line 3")
-    on_exit(fn -> System.delete_env("FAKE_PKL_EXIT"); System.delete_env("FAKE_PKL_STDERR") end)
+
+    on_exit(fn ->
+      System.delete_env("FAKE_PKL_EXIT")
+      System.delete_env("FAKE_PKL_STDERR")
+    end)
 
     {code, err} = run_with_env(["generate", input], %{"PATH" => fake})
     assert code == 4
@@ -102,6 +151,19 @@ defmodule EcsTaskDef.CLITest do
     assert err =~ "family"
   end
 
+  test "non-object pkl output exits 5 with a root type violation instead of crashing", %{dir: dir} do
+    fake = fake_pkl_dir()
+    input = Path.join(dir, "t.pkl")
+    File.write!(input, "irrelevant")
+    System.put_env("FAKE_PKL_STDOUT", "null")
+    on_exit(fn -> System.delete_env("FAKE_PKL_STDOUT") end)
+
+    {code, err} = run_with_env(["generate", input], %{"PATH" => fake})
+    assert code == 5
+    assert err =~ "schema validation failed"
+    assert err =~ "Type mismatch. Expected Object but got Null."
+  end
+
   test "success writes JSON to stdout, progress to stderr", %{dir: dir} do
     fake = fake_pkl_dir()
     input = Path.join(dir, "t.pkl")
@@ -116,7 +178,11 @@ defmodule EcsTaskDef.CLITest do
 
     stdout =
       capture_io(fn ->
-        stderr = capture_io(:stderr, fn -> send(self(), {:code, CLI.run(["generate", input], %{"PATH" => fake})}) end)
+        stderr =
+          capture_io(:stderr, fn ->
+            send(self(), {:code, CLI.run(["generate", input], %{"PATH" => fake})})
+          end)
+
         send(self(), {:stderr, stderr})
       end)
 
@@ -126,6 +192,78 @@ defmodule EcsTaskDef.CLITest do
     assert stderr =~ "✓ pkl 0.31.1 found"
     assert stderr =~ "✓ validated against ECS schema"
     assert stderr =~ "awslabs@#{EcsTaskDef.SchemaPin.short_sha()}"
+  end
+
+  test "env-file value reaches the pkl child when not present in the process environment", %{
+    dir: dir
+  } do
+    fake = fake_pkl_dir()
+    input = Path.join(dir, "t.pkl")
+    File.write!(input, "irrelevant")
+
+    json = ~s({"family":"from-env-file","containerDefinitions":[{"name":"c","image":"i"}]})
+    env_file = Path.join(dir, "vars.env")
+    File.write!(env_file, "FAKE_PKL_STDOUT=#{json}\n")
+
+    stdout =
+      capture_io(fn ->
+        stderr =
+          capture_io(:stderr, fn ->
+            send(
+              self(),
+              {:code, CLI.run(["generate", input, "--env-file", env_file], %{"PATH" => fake})}
+            )
+          end)
+
+        send(self(), {:stderr, stderr})
+      end)
+
+    assert_received {:code, 0}
+    assert_received {:stderr, _stderr}
+    assert JSON.decode!(stdout)["family"] == "from-env-file"
+  end
+
+  test "process env wins over the env-file, and the spawned child sees the real process value, not the injected map value",
+       %{dir: dir} do
+    fake = fake_pkl_dir()
+    input = Path.join(dir, "t.pkl")
+    File.write!(input, "irrelevant")
+
+    real_json =
+      ~s({"family":"real-process-env","containerDefinitions":[{"name":"c","image":"i"}]})
+
+    env_file_json = ~s({"family":"env-file","containerDefinitions":[{"name":"c","image":"i"}]})
+
+    injected_json =
+      ~s({"family":"injected-map","containerDefinitions":[{"name":"c","image":"i"}]})
+
+    env_file = Path.join(dir, "vars.env")
+    File.write!(env_file, "FAKE_PKL_STDOUT=#{env_file_json}\n")
+
+    System.put_env("FAKE_PKL_STDOUT", real_json)
+    on_exit(fn -> System.delete_env("FAKE_PKL_STDOUT") end)
+
+    stdout =
+      capture_io(fn ->
+        stderr =
+          capture_io(:stderr, fn ->
+            send(
+              self(),
+              {:code,
+               CLI.run(
+                 ["generate", input, "--env-file", env_file],
+                 %{"PATH" => fake, "FAKE_PKL_STDOUT" => injected_json}
+               )}
+            )
+          end)
+
+        send(self(), {:stderr, stderr})
+      end)
+
+    assert_received {:code, 0}
+    assert_received {:stderr, stderr}
+    assert stderr =~ "warning: FAKE_PKL_STDOUT is set in both the environment and #{env_file}"
+    assert JSON.decode!(stdout)["family"] == "real-process-env"
   end
 
   test "-o writes the file and unwritable output dir exits 6", %{dir: dir} do
@@ -150,6 +288,17 @@ defmodule EcsTaskDef.CLITest do
     {code2, err2} = run_with_env(["generate", input, "--output", bad_out], %{"PATH" => fake})
     assert code2 == 6
     assert err2 =~ "cannot write"
+  end
+
+  test "init --vendor scaffolds both files and the starter amends the local schema", %{dir: dir} do
+    {code, err} = run_with_env(["init", dir, "--vendor"], %{"PATH" => "/nonexistent"})
+
+    assert code == 0
+    assert err =~ "created #{Path.join(dir, "mytask.pkl")}"
+    assert err =~ "created #{Path.join(dir, "EcsSchema.pkl")}"
+    assert File.exists?(Path.join(dir, "mytask.pkl"))
+    assert File.exists?(Path.join(dir, "EcsSchema.pkl"))
+    assert File.read!(Path.join(dir, "mytask.pkl")) =~ ~s(amends "EcsSchema.pkl")
   end
 
   test "init scaffolds and refuses to overwrite with exit 6", %{dir: dir} do
