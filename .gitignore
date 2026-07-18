@@ -25,3 +25,5 @@ ecs_task_def-*.tar
 # Burrito release output.
 /burrito_out/
 
+# Pkl package build output (pkl project package).
+/pkl/.out/
