@@ -158,20 +158,21 @@ sync with the pinned upstream schema:
 $ mix ecs.regen_schema --check
 ```
 
-Build release binaries (output lands under `burrito_out/`). Left unset,
-`ECS_TASK_DEF_RELEASE_OS` builds **all four** Burrito targets (both CPU
-architectures, both macOS and Linux) in one `mix release` — it does not
-limit the build to your local machine:
+Build both CPU release binaries for the host OS (output lands under
+`burrito_out/`):
 
 ```console
-$ MIX_ENV=prod mix release ecs_task_def --overwrite
+$ mise run build
 ```
 
-Set `ECS_TASK_DEF_RELEASE_OS=linux` or `=macos` to build only that OS's two
-CPU targets, matching what the release workflow's per-OS jobs do. The macOS
-targets need a Zig link path against an SDK with an `arm64-macos` slice;
-macOS 26's SDK ships only `arm64e-macos` and breaks that link, so the
-release workflow builds on `macos-15`, not `macos-26`.
+The same task runs in the release workflow. It fetches Hex dependencies,
+selects both macOS or both Linux targets from the host OS, sets
+`MIX_ENV=prod`, and uses `--overwrite`.
+
+On macOS 26, the task prepends the repository's narrowly scoped `bin/xcrun`
+shim so Zig 0.15.2 links against an installed macOS 14/15 SDK. Other xcrun
+operations still use `/usr/bin/xcrun`. Remove this workaround after Burrito
+supports a Zig version that links against the macOS 26 SDK.
 
 CI (`.github/workflows/ci.yml`) runs the same test suite and regen check on
 Linux and macOS, plus a `check-jsonschema` cross-validation of the golden

@@ -18,11 +18,9 @@ jobs:
   build-binaries:
     strategy:
       matrix:
-        include:
-          - os: ubuntu-latest
-            release_os: linux
-          - os: macos-15 # NOT macos-26: its SDK breaks burrito/zig arm64 linking
-            release_os: macos
+        # macos-15 avoids the Zig 0.15.2/macOS 26 SDK link incompatibility;
+        # mise's build task also carries a local macOS 26 compatibility shim.
+        os: [ubuntu-latest, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -64,12 +62,8 @@ jobs:
 
           echo "tag version $tag_version matches mix.exs and pkl/PklProject"
 
-      - run: mix deps.get
-
       - name: Build releases (this OS's two CPU targets only)
-        env:
-          ECS_TASK_DEF_RELEASE_OS: ${{ matrix.release_os }}
-        run: MIX_ENV=prod mix release ecs_task_def --overwrite
+        run: mise run build
 
       - name: Upload binaries to the release
         env:
@@ -79,9 +73,18 @@ jobs:
           shopt -s nullglob
           tag="${GITHUB_REF_NAME}"
 
-          bins=(burrito_out/ecs_task_def_${{ matrix.release_os }}_*)
+          case "${RUNNER_OS}" in
+            Linux) release_os=linux ;;
+            macOS) release_os=macos ;;
+            *)
+              echo "::error::unsupported runner OS: ${RUNNER_OS}" >&2
+              exit 1
+              ;;
+          esac
+
+          bins=(burrito_out/ecs_task_def_"${release_os}"_*)
           if [ "${#bins[@]}" -ne 2 ]; then
-            echo "::error::expected exactly 2 built binaries matching burrito_out/ecs_task_def_${{ matrix.release_os }}_*, found ${#bins[@]}: ${bins[*]:-none}" >&2
+            echo "::error::expected exactly 2 built binaries matching burrito_out/ecs_task_def_${release_os}_*, found ${#bins[@]}: ${bins[*]:-none}" >&2
             exit 1
           fi
 
