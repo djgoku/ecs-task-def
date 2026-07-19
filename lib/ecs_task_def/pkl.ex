@@ -32,7 +32,11 @@ defmodule EcsTaskDef.Pkl do
           env: [{"ECS_TASK_DEF_STDERR_FILE", stderr_file} | extra_env]
         )
 
-      stderr = File.read!(stderr_file)
+      stderr =
+        case File.read(stderr_file) do
+          {:ok, contents} -> contents
+          {:error, _reason} -> ""
+        end
 
       if exit_code == 0 do
         {:ok, stdout, stderr}

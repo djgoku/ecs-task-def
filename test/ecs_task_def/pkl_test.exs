@@ -36,6 +36,14 @@ defmodule EcsTaskDef.PklTest do
     assert stderr =~ "boom"
   end
 
+  test "missing stderr capture file falls back to an empty diagnostic" do
+    assert {:error, {42, ""}} =
+             Pkl.eval(fake_pkl(), "ignored.pkl", [
+               {"FAKE_PKL_REMOVE_STDERR_FILE", "1"},
+               {"FAKE_PKL_EXIT", "42"}
+             ])
+  end
+
   test "extra_env reaches the child process" do
     # fake_pkl echoes FAKE_PKL_STDOUT; set it ONLY via extra_env
     assert {:ok, out, _} =
