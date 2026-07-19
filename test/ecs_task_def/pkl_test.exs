@@ -11,7 +11,11 @@ defmodule EcsTaskDef.PklTest do
   test "success returns stdout and separately captured stderr" do
     System.put_env("FAKE_PKL_STDOUT", ~s({"family":"x"}))
     System.put_env("FAKE_PKL_STDERR", "some warning")
-    on_exit(fn -> System.delete_env("FAKE_PKL_STDOUT"); System.delete_env("FAKE_PKL_STDERR") end)
+
+    on_exit(fn ->
+      System.delete_env("FAKE_PKL_STDOUT")
+      System.delete_env("FAKE_PKL_STDERR")
+    end)
 
     assert {:ok, out, stderr} = Pkl.eval(fake_pkl(), "ignored.pkl", [])
     assert out == ~s({"family":"x"}\n)
@@ -21,7 +25,11 @@ defmodule EcsTaskDef.PklTest do
   test "failure returns exit code and captured stderr" do
     System.put_env("FAKE_PKL_EXIT", "42")
     System.put_env("FAKE_PKL_STDERR", "-- Pkl Error --\nboom")
-    on_exit(fn -> System.delete_env("FAKE_PKL_EXIT"); System.delete_env("FAKE_PKL_STDERR") end)
+
+    on_exit(fn ->
+      System.delete_env("FAKE_PKL_EXIT")
+      System.delete_env("FAKE_PKL_STDERR")
+    end)
 
     assert {:error, {42, stderr}} = Pkl.eval(fake_pkl(), "ignored.pkl", [])
     assert stderr =~ "Pkl Error"
@@ -30,8 +38,15 @@ defmodule EcsTaskDef.PklTest do
 
   test "extra_env reaches the child process" do
     # fake_pkl echoes FAKE_PKL_STDOUT; set it ONLY via extra_env
-    assert {:ok, out, _} = Pkl.eval(fake_pkl(), "ignored.pkl", [{"FAKE_PKL_STDOUT", "from-extra"}])
+    assert {:ok, out, _} =
+             Pkl.eval(fake_pkl(), "ignored.pkl", [{"FAKE_PKL_STDOUT", "from-extra"}])
+
     assert out == "from-extra\n"
+  end
+
+  test "forces Pkl diagnostics to retain ANSI colors" do
+    assert {:ok, _out, _stderr} =
+             Pkl.eval(fake_pkl(), "ignored.pkl", [{"FAKE_PKL_REQUIRE_COLOR_ALWAYS", "1"}])
   end
 
   @tag :pkl

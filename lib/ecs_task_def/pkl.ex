@@ -1,7 +1,7 @@
 defmodule EcsTaskDef.Pkl do
   @moduledoc """
-  Spawns `pkl eval -f json INPUT` with the merged environment and captures
-  stdout (the JSON) and stderr (diagnostics) separately.
+  Spawns `pkl eval --color=always -f json INPUT` with the merged environment
+  and captures stdout (the JSON) and stderr (diagnostics) separately.
 
   Erlang ports cannot capture a child's stderr separately, so the child runs
   under `/bin/sh -c 'exec "$0" "$@" 2>"$FILE"'` with stderr redirected to a
@@ -19,7 +19,16 @@ defmodule EcsTaskDef.Pkl do
       {stdout, exit_code} =
         System.cmd(
           "/bin/sh",
-          ["-c", ~S(exec "$0" "$@" 2>"$ECS_TASK_DEF_STDERR_FILE"), pkl_path, "eval", "-f", "json", input_path],
+          [
+            "-c",
+            ~S(exec "$0" "$@" 2>"$ECS_TASK_DEF_STDERR_FILE"),
+            pkl_path,
+            "eval",
+            "--color=always",
+            "-f",
+            "json",
+            input_path
+          ],
           env: [{"ECS_TASK_DEF_STDERR_FILE", stderr_file} | extra_env]
         )
 
