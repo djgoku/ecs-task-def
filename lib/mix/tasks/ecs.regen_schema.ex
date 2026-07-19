@@ -57,7 +57,7 @@ defmodule Mix.Tasks.Ecs.RegenSchema do
       generated_contents =
         generated
         |> File.read!()
-        |> String.replace("file://" <> schema_file, raw_url)
+        |> normalize_source_comment(schema_file, raw_url)
 
       targets = %{
         "priv/schema.json" => File.read!(schema_file),
@@ -98,5 +98,24 @@ defmodule Mix.Tasks.Ecs.RegenSchema do
   defp download!(url, dest) do
     {_, code} = System.cmd("curl", ["-fsSL", url, "-o", dest], stderr_to_stdout: true)
     if code != 0, do: Mix.raise("failed to download #{url} (curl exit #{code})")
+  end
+
+  @doc false
+  def normalize_source_comment(contents, schema_file, raw_url) do
+    source_uri = "file://" <> schema_file
+
+    canonical =
+      "/// This module was generated from JSON Schema from\n" <>
+        "/// <#{raw_url}>."
+
+    contents
+    |> String.replace(
+      "/// This module was generated from JSON Schema from <#{source_uri}>.",
+      canonical
+    )
+    |> String.replace(
+      "/// This module was generated from JSON Schema from\n/// <#{source_uri}>.",
+      canonical
+    )
   end
 end
