@@ -178,3 +178,71 @@ set -euo pipefail
 
 mise run release-check-pkl
 '''
+
+[tasks.release-ensure]
+description = "Create the GitHub release or confirm a concurrent job created it"
+depends = ["release-validate-tag"]
+shell = "bash -c"
+run = '''
+set -euo pipefail
+
+if [ -z "${GH_TOKEN:-}" ]; then
+  echo "::error::GH_TOKEN is required to create or inspect the GitHub release" >&2
+  exit 1
+fi
+
+tag="${RELEASE_TAG:-}"
+if ! gh release create "$tag" --verify-tag --title "$tag" \
+     --notes "Automated release for $tag."; then
+  if ! gh release view "$tag" >/dev/null 2>&1; then
+    echo "::error::gh release create failed and no release exists for $tag (not a create-create race)" >&2
+    exit 1
+  fi
+  echo "release $tag already exists (created by a concurrent release job); continuing"
+fi
+'''
+
+[tasks.release-publish-binaries]
+description = "Upload this host OS's two Burrito binaries to the GitHub release"
+depends = ["release-validate-tag", "release-check-binaries"]
+shell = "bash -c"
+run = '''
+set -euo pipefail
+shopt -s nullglob
+
+mise run release-ensure
+
+tag="${RELEASE_TAG:-}"
+case "$(uname -s)" in
+  Darwin) release_os=macos ;;
+  Linux) release_os=linux ;;
+  *)
+    echo "::error::unsupported host OS: $(uname -s) (expected Darwin or Linux)" >&2
+    exit 1
+    ;;
+esac
+
+bins=(burrito_out/ecs_task_def_"${release_os}"_*)
+for bin in "${bins[@]}"; do
+  name="$(basename "$bin" | sed 's/^ecs_task_def_/ecs-task-def-/')"
+  cp "$bin" "/tmp/$name"
+  gh release upload "$tag" "/tmp/$name" --clobber
+done
+'''
+
+[tasks.release-publish-pkl]
+description = "Upload the four Pkl package artifacts to the GitHub release"
+depends = ["release-validate-tag", "release-check-pkl"]
+shell = "bash -c"
+run = '''
+set -euo pipefail
+shopt -s nullglob
+
+mise run release-ensure
+
+tag="${RELEASE_TAG:-}"
+assets=(pkl/.out/*/*)
+for asset in "${assets[@]}"; do
+  gh release upload "$tag" "$asset" --clobber
+done
+'''
