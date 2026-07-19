@@ -59,8 +59,9 @@ defmodule EcsTaskDef.EnvFileTest do
   test "duplicate keys: last wins, with a warning naming key and both lines" do
     path = write!("FOO=first\nBAR=x\nFOO=second\n")
     assert {:ok, %{"FOO" => "second", "BAR" => "x"}, [warning]} = EnvFile.parse(path)
-    assert warning =~ "duplicate key FOO"
-    assert warning =~ "lines 1 and 3"
+
+    assert warning ==
+             "warning: #{path}: duplicate key FOO on lines 1 and 3; using line 3"
   end
 
   test "line with no = is an error with file:line" do

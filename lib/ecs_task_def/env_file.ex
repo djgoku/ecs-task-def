@@ -34,7 +34,7 @@ defmodule EcsTaskDef.EnvFile do
               %{^key => prev_no} ->
                 warns ++
                   [
-                    "#{path}: duplicate key #{key} on lines #{prev_no} and #{no}; using line #{no}"
+                    "warning: #{path}: duplicate key #{key} on lines #{prev_no} and #{no}; using line #{no}"
                   ]
 
               _ ->
