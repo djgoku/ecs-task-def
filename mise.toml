@@ -33,3 +33,59 @@ esac
 
 MIX_ENV=prod mix release ecs_task_def --overwrite
 """
+
+[tasks.release-smoke]
+description = "Smoke-test the host-native Burrito release binary"
+run = """
+set -eu
+
+case "$(uname -s)" in
+  Darwin) release_os=macos ;;
+  Linux) release_os=linux ;;
+  *)
+    echo "release-smoke: unsupported host OS: $(uname -s) (expected Darwin or Linux)" >&2
+    exit 1
+    ;;
+esac
+
+case "$(uname -m)" in
+  arm64|aarch64) release_arch=aarch64 ;;
+  x86_64|amd64) release_arch=x86_64 ;;
+  *)
+    echo "release-smoke: unsupported host architecture: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
+binary="$PWD/burrito_out/ecs_task_def_${release_os}_${release_arch}"
+if [ ! -x "$binary" ]; then
+  echo "release-smoke: expected executable $binary; run 'mise run build' first" >&2
+  exit 1
+fi
+
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ecs-task-def-release-smoke.XXXXXX")"
+trap 'rm -rf "$tmp_dir"' 0
+
+"$binary" --help >/dev/null
+"$binary" init "$tmp_dir/project" --vendor >/dev/null
+
+output="$tmp_dir/task.json"
+status_file="$tmp_dir/generate.status"
+(
+  set +e
+  ECR_REPO=example.invalid/my-app IMAGE_TAG=smoke \
+    "$binary" generate "$tmp_dir/project/mytask.pkl"
+  status=$?
+  set -e
+  printf '%s\\n' "$status" >"$status_file"
+) | cat >"$output"
+
+generate_status="$(cat "$status_file")"
+if [ "$generate_status" -ne 0 ]; then
+  echo "release-smoke: generate exited $generate_status" >&2
+  exit "$generate_status"
+fi
+
+elixir -e 'path = hd(System.argv()); data = path |> File.read!() |> JSON.decode!(); unless data["family"] == "my-app", do: System.halt(1)' "$output"
+echo "release-smoke: passed $binary"
+"""

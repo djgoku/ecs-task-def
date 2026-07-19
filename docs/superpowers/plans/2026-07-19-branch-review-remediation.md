@@ -332,7 +332,7 @@ status_file="$tmp_dir/generate.status"
     "$binary" generate "$tmp_dir/project/mytask.pkl"
   status=$?
   set -e
-  printf '%s\n' "$status" >"$status_file"
+  printf '%s\\n' "$status" >"$status_file"
 ) | cat >"$output"
 
 generate_status="$(cat "$status_file")"
