@@ -195,17 +195,24 @@ Claude.
 Delete the `claude = { ... }` line from `[tools]` in `mise.toml`. Keep Erlang,
 Elixir, Pkl, Zig, xz-tools, xz, and 7zip unchanged.
 
-- [ ] **Step 3: Regenerate the project lockfile**
+- [ ] **Step 3: Remove only Claude from the project lockfile**
 
-Run:
+Delete the contiguous Claude section in `mise.lock`, beginning with:
 
-```bash
-mise lock
+```toml
+[[tools.claude]]
 ```
 
-Expected: the `[[tools.claude]]` entry and all
-`[tools.claude."platforms.*"]` tables are removed from `mise.lock`; unrelated
-locked versions remain unchanged.
+and ending with the `tools.claude.platforms.windows-x64` table immediately before:
+
+```toml
+[[tools."conda:xz"]]
+```
+
+This removes the `[[tools.claude]]` entry and all seven
+`[tools.claude."platforms.*"]` tables. Do not run `mise lock`: a full refresh
+rewrites unrelated platform metadata, including the deliberately unresolved
+`conda:xz-tools` entries documented by the CI workflows.
 
 - [ ] **Step 4: Verify the toolchain contract**
 
@@ -231,6 +238,22 @@ git diff -- mise.toml mise.lock
 ```
 
 Expected: only the Claude declaration and Claude lock tables are removed.
+
+Additionally run:
+
+```bash
+git diff --numstat -- mise.toml mise.lock
+```
+
+Expected:
+
+```text
+0	31	mise.lock
+0	1	mise.toml
+```
+
+Any added or otherwise changed lines indicate unrelated lockfile churn and must
+be reverted before committing.
 
 Then:
 
