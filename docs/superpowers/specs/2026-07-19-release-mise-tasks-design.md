@@ -19,18 +19,24 @@ and `release-smoke` task style:
   project version and `pkl/PklProject` version. It strips the prefix only into a
   local `tag_version` used for those comparisons.
 - `release-package-pkl` runs `pkl project package` from `pkl/` and requires
-  exactly four output artifacts: the metadata JSON, package ZIP, and their two
-  SHA-256 sidecars.
+  the safe `release-check-pkl` task to accept exactly four output artifacts:
+  the metadata JSON, package ZIP, and their two SHA-256 sidecars.
+- `release-check-binaries` derives `linux` or `macos` from `uname -s` and
+  requires exactly two Burrito binaries for that operating system. It does not
+  require `GH_TOKEN` or mutate GitHub.
+- `release-check-pkl` requires exactly four Pkl package artifacts and does not
+  require `GH_TOKEN` or mutate GitHub.
 - `release-ensure` depends on tag validation and performs the existing
   race-safe GitHub release creation. A failed `gh release create` is accepted
   only when `gh release view` proves another concurrent job created the same
   release.
-- `release-publish-binaries` depends on `release-ensure`, derives `linux` or
-  `macos` from `uname -s`, requires exactly two Burrito binaries for that
-  operating system, converts their names from `ecs_task_def_*` to
+- `release-publish-binaries` depends on tag validation and
+  `release-check-binaries`. After both safe dependencies pass, its body runs
+  `release-ensure`, converts binary names from `ecs_task_def_*` to
   `ecs-task-def-*`, and uploads them with `--clobber`.
-- `release-publish-pkl` depends on `release-ensure`, rechecks that exactly four
-  package artifacts exist, and uploads them with `--clobber`.
+- `release-publish-pkl` depends on tag validation and `release-check-pkl`.
+  After both safe dependencies pass, its body runs `release-ensure` and uploads
+  all four artifacts with `--clobber`.
 
 Keep the existing `build` and `release-smoke` tasks unchanged. Publishing tasks
 do not implicitly build binaries or package Pkl, so the safe preparation steps
@@ -65,8 +71,10 @@ The validation and Pkl packaging tasks do not mutate GitHub. Only
 failures, unexpected artifact counts, and non-race `gh` failures remain fatal
 with focused messages. Keep the existing `::error::` prefixes in task failures
 to preserve GitHub annotation behavior; they are harmless when printed locally.
-The publishing tasks invoke the mutating `release-ensure` transitively through
-their mise dependency.
+The publishing tasks invoke the mutating `release-ensure` sequentially from
+their bodies, after their safe dependencies have passed. This preserves the
+current guarantee that an artifact-count failure cannot create an empty GitHub
+release.
 
 ## Workflow Shape
 
@@ -171,7 +179,8 @@ To reach upload behavior, create exactly two disposable
 `pkl/.out/*/*` package fixtures. Verify the fake recorded the full
 `ecs-task-def@0.1.0` tag, both renamed `ecs-task-def-<host-os>_*` binary upload
 paths, all four Pkl artifact paths, and `--clobber`. Also run each task with an
-extra artifact and confirm its exact-count gate fails before upload.
+extra artifact and confirm its exact-count gate fails with zero `release create`
+and zero `release upload` calls.
 
 ## Alternatives Considered
 
@@ -181,3 +190,9 @@ A single monolithic release task would minimize workflow steps but make safe
 local validation inseparable from GitHub mutation. Composable inline tasks fit
 the repository’s existing pattern while preserving clear side-effect
 boundaries.
+
+Making publish tasks depend directly on `release-ensure` was also rejected.
+Mise runs dependencies before the task body, so that dependency graph could
+create an empty GitHub release before artifact-count validation fails. The
+chosen design keeps the checks as safe dependencies and invokes
+`release-ensure` sequentially only after those gates pass.
