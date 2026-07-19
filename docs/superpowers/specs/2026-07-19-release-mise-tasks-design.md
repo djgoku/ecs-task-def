@@ -16,7 +16,8 @@ and `release-smoke` task style:
 
 - `release-validate-tag` validates `RELEASE_TAG` against the required
   `ecs-task-def@X.Y.Z` format and requires the tag version to equal both the Mix
-  project version and `pkl/PklProject` version.
+  project version and `pkl/PklProject` version. It strips the prefix only into a
+  local `tag_version` used for those comparisons.
 - `release-package-pkl` runs `pkl project package` from `pkl/` and requires
   exactly four output artifacts: the metadata JSON, package ZIP, and their two
   SHA-256 sidecars.
@@ -33,13 +34,26 @@ and `release-smoke` task style:
 
 Keep the existing `build` and `release-smoke` tasks unchanged. Publishing tasks
 do not implicitly build binaries or package Pkl, so the safe preparation steps
-remain explicit and independently runnable.
+remain explicit and independently runnable. A local caller must run `build`
+before `release-publish-binaries`, and must run `release-package-pkl` before
+`release-publish-pkl`; otherwise the publishing task fails at its exact artifact
+count gate.
 
 ## Inputs and Side Effects
 
-`RELEASE_TAG` is the canonical tag input for validation and publishing tasks.
-GitHub Actions sets it from `${{ github.ref_name }}` at workflow scope. Local
-callers use the same interface:
+`RELEASE_TAG` is the canonical, environment-only tag input for validation and
+publishing tasks. It always retains the full `ecs-task-def@X.Y.Z` form when
+passed to `gh`; only `release-validate-tag` derives the stripped `X.Y.Z` value
+for version comparisons. No task accepts the tag as a positional argument.
+
+GitHub Actions sets the full tag once at workflow scope:
+
+```yaml
+env:
+  RELEASE_TAG: ${{ github.ref_name }}
+```
+
+Local callers use the same interface:
 
 ```sh
 RELEASE_TAG=ecs-task-def@0.1.0 mise run release-validate-tag
@@ -49,11 +63,15 @@ The validation and Pkl packaging tasks do not mutate GitHub. Only
 `release-ensure`, `release-publish-binaries`, and `release-publish-pkl` require
 `GH_TOKEN` and make GitHub changes. Missing inputs, unsupported hosts, parse
 failures, unexpected artifact counts, and non-race `gh` failures remain fatal
-with focused messages.
+with focused messages. Keep the existing `::error::` prefixes in task failures
+to preserve GitHub annotation behavior; they are harmless when printed locally.
+The publishing tasks invoke the mutating `release-ensure` transitively through
+their mise dependency.
 
 ## Workflow Shape
 
-The binary matrix job will:
+The workflow declares the top-level `RELEASE_TAG` environment mapping shown
+above. The binary matrix job will:
 
 1. install the mise toolchain;
 2. run `mise run release-validate-tag`;
@@ -70,6 +88,9 @@ The Pkl package job will:
 
 The workflow retains the two-OS matrix, concurrency policy, permissions, and
 non-strict mise installation rationale. Its multiline shell blocks are removed.
+Calling `release-validate-tag` as its own workflow step and again transitively
+through `release-ensure` is an intentional, idempotent recheck across separate
+mise invocations.
 
 ## Knowledge-Base Updates
 
@@ -84,6 +105,26 @@ Apple Container 1.1.0 release and the reproduced service/CLI upgrade mismatch:
   tool aligned the CLI, service, `vminit`, and kernel components; and
 - a minimal Ubuntu `uname -a` plus the project’s full Linux regeneration check
   proved the repair.
+
+Record the proof with the claims:
+
+- `gh release view 1.1.0 --repo apple/container` reported the official 1.1.0
+  release published on 2026-07-06;
+- before repair, `mise where aqua:apple/container` selected 1.1.0 while
+  `container --version` and `container system status` reported 1.0.0, and status
+  named the removed
+  `~/.local/share/mise/installs/aqua-apple-container/1.0.0/Payload/` install
+  root;
+- the stalled container had no `stdio.log`, proving the guest command never
+  started;
+- after
+  `mise x aqua:apple/container@1.1.0 -- container system stop` followed by
+  `container system start` through the same explicit mise tool, both CLI and
+  API server reported 1.1.0 with the 1.1.0 install root;
+- `container run --rm --arch arm64 ubuntu:24.04 uname -a` exited successfully;
+  and
+- an official Elixir 1.20/OTP 29 image run through Apple Container completed
+  `mix ecs.regen_schema --check` with `regen check: all artifacts up to date`.
 
 Correct the installation guidance: Apple publishes a signed installer, while
 the aqua/mise package is also a validated installation path sharing the same
@@ -100,15 +141,37 @@ requirement.
 - Exercise `release-validate-tag` with the valid project version, an invalid
   prefix, and a mismatched version.
 - Run `release-package-pkl` and confirm its exact-four-artifact check.
-- Exercise release creation and both publishing tasks against a fake `gh`
-  executable so command construction, concurrent-create handling, renaming,
-  and artifact selection are verified without mutating GitHub.
+- Exercise release creation and both publishing tasks against the fake `gh`
+  harness described below so command construction, concurrent-create handling,
+  renaming, and artifact selection are verified without mutating GitHub.
 - Confirm `.github/workflows/release.yml` contains no multiline `run: |` shell
   blocks and parses as valid YAML.
 - Run TOML formatting/checking, Mix formatting, warnings-as-errors compilation,
   and the complete ExUnit suite.
 - Scan the three knowledge-base files for stale “latest = 1.0.0” claims and
   verify that every new operational claim includes the observed evidence.
+
+### Fake `gh` Harness
+
+Run publishing verification in a disposable copy of the repository with
+`RELEASE_TAG=ecs-task-def@0.1.0`, matching the current versions in `mix.exs` and
+`pkl/PklProject`. Prepend a temporary directory containing a recording fake
+`gh` executable to `PATH`.
+
+The fake accepts a mode environment variable and records every argument vector.
+Exercise all three `release-ensure` outcomes:
+
+1. `create-ok`: `gh release create` exits zero;
+2. `create-race`: create exits nonzero and `gh release view` exits zero; and
+3. `create-fatal`: both create and view exit nonzero, and the mise task must
+   fail.
+
+To reach upload behavior, create exactly two disposable
+`burrito_out/ecs_task_def_<host-os>_*` binary fixtures and exactly four
+`pkl/.out/*/*` package fixtures. Verify the fake recorded the full
+`ecs-task-def@0.1.0` tag, both renamed `ecs-task-def-<host-os>_*` binary upload
+paths, all four Pkl artifact paths, and `--clobber`. Also run each task with an
+extra artifact and confirm its exact-count gate fails before upload.
 
 ## Alternatives Considered
 
