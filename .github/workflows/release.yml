@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  RELEASE_TAG: ${{ github.ref_name }}
+
 # Guard against the same tag re-triggering an overlapping run (e.g. a
 # force-pushed tag); never cancel a run that may already be uploading assets.
 concurrency:
@@ -38,29 +41,7 @@ jobs:
         run: mise install
 
       - name: Validate tag matches mix.exs and pkl/PklProject versions
-        run: |
-          set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          tag_version="${tag#ecs-task-def@}"
-          if [ "$tag_version" = "$tag" ]; then
-            echo "::error::tag '$tag' does not match the required 'ecs-task-def@X.Y.Z' format" >&2
-            exit 1
-          fi
-
-          mix_version=$(grep -m1 -E '^\s*version:\s*"' mix.exs | sed -E 's/.*"([^"]+)".*/\1/')
-          pkl_version=$(grep -m1 -E 'version = "' pkl/PklProject | sed -E 's/.*"([^"]+)".*/\1/')
-
-          if [ -z "$mix_version" ] || [ -z "$pkl_version" ]; then
-            echo "::error::could not parse version from mix.exs ('$mix_version') or pkl/PklProject ('$pkl_version')" >&2
-            exit 1
-          fi
-
-          if [ "$tag_version" != "$mix_version" ] || [ "$tag_version" != "$pkl_version" ]; then
-            echo "::error::tag version '$tag_version' must match mix.exs version '$mix_version' and pkl/PklProject version '$pkl_version'" >&2
-            exit 1
-          fi
-
-          echo "tag version $tag_version matches mix.exs and pkl/PklProject"
+        run: mise run release-validate-tag
 
       - name: Build releases (this OS's two CPU targets only)
         run: mise run build
@@ -71,47 +52,7 @@ jobs:
       - name: Upload binaries to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          tag="${GITHUB_REF_NAME}"
-
-          case "${RUNNER_OS}" in
-            Linux) release_os=linux ;;
-            macOS) release_os=macos ;;
-            *)
-              echo "::error::unsupported runner OS: ${RUNNER_OS}" >&2
-              exit 1
-              ;;
-          esac
-
-          bins=(burrito_out/ecs_task_def_"${release_os}"_*)
-          if [ "${#bins[@]}" -ne 2 ]; then
-            echo "::error::expected exactly 2 built binaries matching burrito_out/ecs_task_def_${release_os}_*, found ${#bins[@]}: ${bins[*]:-none}" >&2
-            exit 1
-          fi
-
-          # Race-safe create: on a tag push the tag already exists, so a
-          # first-time create normally succeeds (adopts the tag). It only
-          # fails when the other OS's job already created this same release
-          # (gh: "a release with the same tag name already exists", exit 1
-          # -- knowledge-base/github-releases.md). Accept that failure ONLY
-          # if `gh release view` proves the release now exists; any other
-          # failure (auth, network, bad tag) must fail loud.
-          if ! gh release create "$tag" --verify-tag --title "$tag" \
-               --notes "Automated release for $tag."; then
-            if ! gh release view "$tag" >/dev/null 2>&1; then
-              echo "::error::gh release create failed and no release exists for $tag (not a create-create race)" >&2
-              exit 1
-            fi
-            echo "release $tag already exists (created by the concurrent OS job); continuing"
-          fi
-
-          for bin in "${bins[@]}"; do
-            name=$(basename "$bin" | sed 's/^ecs_task_def_/ecs-task-def-/')
-            cp "$bin" "/tmp/$name"
-            gh release upload "$tag" "/tmp/$name" --clobber
-          done
+        run: mise run release-publish-binaries
 
   pkl-package:
     runs-on: ubuntu-latest
@@ -126,56 +67,12 @@ jobs:
         run: mise install
 
       - name: Validate tag matches mix.exs and pkl/PklProject versions
-        run: |
-          set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          tag_version="${tag#ecs-task-def@}"
-          if [ "$tag_version" = "$tag" ]; then
-            echo "::error::tag '$tag' does not match the required 'ecs-task-def@X.Y.Z' format" >&2
-            exit 1
-          fi
+        run: mise run release-validate-tag
 
-          mix_version=$(grep -m1 -E '^\s*version:\s*"' mix.exs | sed -E 's/.*"([^"]+)".*/\1/')
-          pkl_version=$(grep -m1 -E 'version = "' pkl/PklProject | sed -E 's/.*"([^"]+)".*/\1/')
+      - name: Package the Pkl release artifacts
+        run: mise run release-package-pkl
 
-          if [ -z "$mix_version" ] || [ -z "$pkl_version" ]; then
-            echo "::error::could not parse version from mix.exs ('$mix_version') or pkl/PklProject ('$pkl_version')" >&2
-            exit 1
-          fi
-
-          if [ "$tag_version" != "$mix_version" ] || [ "$tag_version" != "$pkl_version" ]; then
-            echo "::error::tag version '$tag_version' must match mix.exs version '$mix_version' and pkl/PklProject version '$pkl_version'" >&2
-            exit 1
-          fi
-
-          echo "tag version $tag_version matches mix.exs and pkl/PklProject"
-
-      - name: Package and upload the Pkl package artifacts
+      - name: Upload the Pkl package artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          tag="${GITHUB_REF_NAME}"
-
-          (cd pkl && pkl project package)
-
-          assets=(pkl/.out/*/*)
-          if [ "${#assets[@]}" -ne 4 ]; then
-            echo "::error::expected exactly 4 pkl package artifacts (metadata json + zip + their .sha256 sidecars), found ${#assets[@]}: ${assets[*]:-none}" >&2
-            exit 1
-          fi
-
-          # Race-safe create: see build-binaries job for the full rationale.
-          if ! gh release create "$tag" --verify-tag --title "$tag" \
-               --notes "Automated release for $tag."; then
-            if ! gh release view "$tag" >/dev/null 2>&1; then
-              echo "::error::gh release create failed and no release exists for $tag (not a create-create race)" >&2
-              exit 1
-            fi
-            echo "release $tag already exists (created by the concurrent binaries job); continuing"
-          fi
-
-          for asset in "${assets[@]}"; do
-            gh release upload "$tag" "$asset" --clobber
-          done
+        run: mise run release-publish-pkl
