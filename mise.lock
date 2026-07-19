@@ -155,38 +155,6 @@ checksum = "sha256:1cc38a9e3777ce0e4bbf84475672888a581d400633b0448fd973a7a6aa56c
 url = "https://github.com/ip7z/7zip/releases/download/26.00/7z2600-extra.7z"
 url_api = "https://api.github.com/repos/ip7z/7zip/releases/assets/354793886"
 
-[[tools.claude]]
-version = "2.1.214"
-backend = "http:claude"
-
-[tools.claude."platforms.linux-arm64"]
-checksum = "sha256:4c38f26a57a42619ee813f15dc39fc1fa4fe0bb403215c3cdc342b58fa689c3c"
-url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.214/linux-arm64/claude"
-
-[tools.claude."platforms.linux-arm64-musl"]
-checksum = "sha256:4c38f26a57a42619ee813f15dc39fc1fa4fe0bb403215c3cdc342b58fa689c3c"
-url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.214/linux-arm64/claude"
-
-[tools.claude."platforms.linux-x64"]
-checksum = "sha256:3c029136f7c81f54ed4a38e9d52e655aad536433dbbde50519c8c31bb646ad14"
-url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.214/linux-x64/claude"
-
-[tools.claude."platforms.linux-x64-musl"]
-checksum = "sha256:3c029136f7c81f54ed4a38e9d52e655aad536433dbbde50519c8c31bb646ad14"
-url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.214/linux-x64/claude"
-
-[tools.claude."platforms.macos-arm64"]
-checksum = "sha256:59796dd18e9d77f1256f367db6d28ce4bd9cd5968e402ad3a327aac36abc6dec"
-url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.214/darwin-arm64/claude"
-
-[tools.claude."platforms.macos-x64"]
-checksum = "sha256:d979ba15662828969e5d0f39f1367798a07ef6e031b524efdad37fe7caf84010"
-url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.214/darwin-x64/claude"
-
-[tools.claude."platforms.windows-x64"]
-checksum = "sha256:da26afacbc58d6f569d0921ff6825772220c734327f5f976c0c73bd0b7dd3cf8"
-url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.214/win32-x64/claude.exe"
-
 [[tools."conda:xz"]]
 version = "5.8.3"
 backend = "conda:xz"

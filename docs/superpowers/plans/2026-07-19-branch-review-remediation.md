@@ -248,7 +248,7 @@ git diff --numstat -- mise.toml mise.lock
 Expected:
 
 ```text
-0	31	mise.lock
+0	32	mise.lock
 0	1	mise.toml
 ```
 
