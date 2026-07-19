@@ -5,3 +5,32 @@ elixir = "1.20.1-otp-29"
 pkl = "0.31.1"
 zig = "0.15.2" # required by burrito at release-build time
 "conda:xz-tools" = "latest" # required by burrito at release-build time
+"conda:xz" = "latest"
+"aqua:ip7z/7zip" = "latest"
+
+[tasks.deps]
+description = "Fetch Hex dependencies"
+run = "mix deps.get"
+
+[tasks.build]
+description = "Build both Burrito release binaries for the host OS"
+depends = ["deps"]
+run = """
+set -eu
+
+case "$(uname -s)" in
+  Darwin)
+    export ECS_TASK_DEF_RELEASE_OS=macos
+    export PATH="$PWD/bin:$PATH"
+    ;;
+  Linux)
+    export ECS_TASK_DEF_RELEASE_OS=linux
+    ;;
+  *)
+    echo "build: unsupported host OS: $(uname -s) (expected Darwin or Linux)" >&2
+    exit 1
+    ;;
+esac
+
+MIX_ENV=prod mix release ecs_task_def --overwrite
+"""
