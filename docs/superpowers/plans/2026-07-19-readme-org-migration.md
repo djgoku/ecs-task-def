@@ -205,14 +205,20 @@ Expected: both commands exit `0`.
 Run:
 
 ```bash
-if rg -n '^```|^#{2,6} |^# ecs-task-def$|\[[^]]+\]\(https?://|\*\*[^*]+\*\*|`[^`]+`' README.org; then
+if awk '
+  /^#\+begin_src / { in_src = 1; next }
+  /^#\+end_src$/ { in_src = 0; next }
+  !in_src { print }
+' README.org |
+  rg -n '^```|^#{2,6} |^# ecs-task-def$|\[[^]]+\]\(https?://|\*\*[^*]+\*\*|`[^`]+`'; then
   echo "README.org still contains Markdown syntax" >&2
   exit 1
 fi
 ```
 
-Expected: no matches and exit `0`. The console comment `# or` is intentionally
-not treated as a Markdown heading.
+Expected: no prose matches and exit `0`. Source-block contents are excluded so
+captured console output remains byte-for-byte unchanged. The console comment
+`# or` is intentionally not treated as a Markdown heading.
 
 - [ ] **Step 10: Parse and lint with Org mode**
 
@@ -220,10 +226,12 @@ Run:
 
 ```bash
 emacs_bin="$(mise which emacs)"
-"$emacs_bin" --batch README.org --eval '(progn (require (quote org)) (org-mode) (let ((issues (org-lint))) (when issues (princ issues) (kill-emacs 1))))'
+"$emacs_bin" --batch README.org --eval '(progn (require (quote org)) (add-to-list (quote org-src-lang-modes) (quote ("console" . sh))) (org-mode) (let ((issues (org-lint))) (when issues (princ issues) (kill-emacs 1))))'
 ```
 
-Expected: exit `0` with no Org lint issues.
+Expected: exit `0` with no Org lint issues. The lint process registers
+`console` as shell-derived because Org Babel does not define that
+documentation-only language by default.
 
 - [ ] **Step 11: Compare semantic renderings**
 
@@ -231,28 +239,29 @@ Run:
 
 ```bash
 diff -u \
-  <(git show HEAD:README.md | pandoc -f gfm -t plain) \
+  <(git show HEAD:README.md | pandoc -f gfm -t plain | sed 's/export  prefix/export prefix/') \
   <(pandoc -f org -t plain README.org)
 ```
 
-Expected: no semantic text differences and exit `0`. If Pandoc formats the Org
-table separator differently, inspect that isolated rendering difference and
-confirm all header and data cells are unchanged.
+Expected: no semantic text differences and exit `0`. The baseline normalization
+accounts for Markdown's invisible trailing space inside the `` `export ` ``
+span; Org inline verbatim cannot end with whitespace, and both rendered
+documents display the same `export prefix` wording.
 
 - [ ] **Step 12: Inspect rename and content scope**
 
 Run:
 
 ```bash
-git diff --check
-git diff --summary --find-renames
-git diff --word-diff=color --find-renames -- README.md README.org
+git diff HEAD --check
+git diff HEAD --summary --find-renames=20%
+git diff HEAD --word-diff=color --find-renames=20% -- README.md README.org
 ```
 
 Expected:
 
 - no whitespace errors;
-- a rename from `README.md` to `README.org`;
+- a rename from `README.md` to `README.org` at Git's reported 46% similarity;
 - only Markdown-to-Org delimiters and the necessary emphasized-line reflow
   differ at the word level.
 
@@ -281,7 +290,7 @@ Run:
 
 ```bash
 git show --stat --summary HEAD
-git show --word-diff=color --find-renames HEAD -- README.md README.org
+git show --word-diff=color --find-renames=20% HEAD -- README.md README.org
 ```
 
 Expected: one README rename commit with format-only changes.
@@ -307,7 +316,7 @@ Run:
 
 ```bash
 emacs_bin="$(mise which emacs)"
-"$emacs_bin" --batch README.org --eval '(progn (require (quote org)) (org-mode) (let ((issues (org-lint))) (when issues (princ issues) (kill-emacs 1))))'
+"$emacs_bin" --batch README.org --eval '(progn (require (quote org)) (add-to-list (quote org-src-lang-modes) (quote ("console" . sh))) (org-mode) (let ((issues (org-lint))) (when issues (princ issues) (kill-emacs 1))))'
 ```
 
 Expected: exit `0` with no Org lint issues.
