@@ -89,3 +89,92 @@ fi
 elixir -e 'path = hd(System.argv()); data = path |> File.read!() |> JSON.decode!(); unless data["family"] == "my-app", do: System.halt(1)' "$output"
 echo "release-smoke: passed $binary"
 """
+
+[tasks.release-validate-tag]
+description = "Validate the release tag against the Mix and Pkl project versions"
+shell = "bash -c"
+run = '''
+set -euo pipefail
+
+tag="${RELEASE_TAG:-}"
+if [ -z "$tag" ]; then
+  echo "::error::RELEASE_TAG is required (expected ecs-task-def@X.Y.Z)" >&2
+  exit 1
+fi
+
+tag_version="${tag#ecs-task-def@}"
+if [ "$tag_version" = "$tag" ]; then
+  echo "::error::tag '$tag' does not match the required 'ecs-task-def@X.Y.Z' format" >&2
+  exit 1
+fi
+
+mix_version="$(grep -m1 -E '^[[:space:]]*version:[[:space:]]*"' mix.exs | sed -E 's/.*"([^"]+)".*/\1/')"
+pkl_version="$(grep -m1 -E 'version = "' pkl/PklProject | sed -E 's/.*"([^"]+)".*/\1/')"
+
+if [ -z "$mix_version" ] || [ -z "$pkl_version" ]; then
+  echo "::error::could not parse version from mix.exs ('$mix_version') or pkl/PklProject ('$pkl_version')" >&2
+  exit 1
+fi
+
+if [ "$tag_version" != "$mix_version" ] || [ "$tag_version" != "$pkl_version" ]; then
+  echo "::error::tag version '$tag_version' must match mix.exs version '$mix_version' and pkl/PklProject version '$pkl_version'" >&2
+  exit 1
+fi
+
+echo "tag version $tag_version matches mix.exs and pkl/PklProject"
+'''
+
+[tasks.release-check-binaries]
+description = "Require exactly two Burrito binaries for the host OS"
+shell = "bash -c"
+run = '''
+set -euo pipefail
+shopt -s nullglob
+
+case "$(uname -s)" in
+  Darwin) release_os=macos ;;
+  Linux) release_os=linux ;;
+  *)
+    echo "::error::unsupported host OS: $(uname -s) (expected Darwin or Linux)" >&2
+    exit 1
+    ;;
+esac
+
+bins=(burrito_out/ecs_task_def_"${release_os}"_*)
+if [ "{{ "${" }}#bins[@]}" -ne 2 ]; then
+  echo "::error::expected exactly 2 built binaries matching burrito_out/ecs_task_def_${release_os}_*, found {{ "${" }}#bins[@]}: ${bins[*]:-none}" >&2
+  exit 1
+fi
+
+echo "found exactly 2 Burrito binaries for $release_os"
+'''
+
+[tasks.release-check-pkl]
+description = "Require exactly four Pkl package artifacts"
+shell = "bash -c"
+run = '''
+set -euo pipefail
+shopt -s nullglob
+
+assets=(pkl/.out/*/*)
+if [ "{{ "${" }}#assets[@]}" -ne 4 ]; then
+  echo "::error::expected exactly 4 pkl package artifacts (metadata json + zip + their .sha256 sidecars), found {{ "${" }}#assets[@]}: ${assets[*]:-none}" >&2
+  exit 1
+fi
+
+echo "found exactly 4 Pkl package artifacts"
+'''
+
+[tasks.release-package-pkl]
+description = "Package Pkl and require its four release artifacts"
+shell = "bash -c"
+run = '''
+set -euo pipefail
+
+(
+  cd pkl
+  pkl project package
+)
+
+mise run release-check-pkl
+'''
