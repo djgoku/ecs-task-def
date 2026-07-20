@@ -18,12 +18,21 @@ the schema and can still be rejected at registration time.
 ** Installation
 
 ~ecs-task-def~ ships as a single self-contained binary (via
-[[https://github.com/burrito-elixir/burrito][Burrito]]) for macOS and Linux,
-built by the release workflow in this repo. *No release has been published yet*
-— once one is, download the binary for your platform from this repo's
+[[https://github.com/burrito-elixir/burrito][Burrito]]) for macOS and Linux.
+Download the binary and matching ~.sha256~ file for your platform from this
+repo's
 [[https://github.com/djgoku/aws-ecs-task-definition-generator/releases][GitHub Releases]]
-page and put it on your ~PATH~. Until then, run it from source (see
-Contributing below).
+page, verify the download, and put the binary on your ~PATH~:
+
+#+begin_src console
+$ shasum -a 256 -c ecs-task-def-macos_aarch64.sha256
+ecs-task-def-macos_aarch64: OK
+#+end_src
+
+Substitute the filename for your operating system and architecture. The
+checksum detects download corruption; because it is published beside the
+binary, it is not a signed proof of authenticity. To run from source instead,
+see Contributing below.
 
 *** Prerequisite: the Pkl CLI
 
@@ -47,10 +56,9 @@ or too old.
 Scaffolds a starter ~mytask.pkl~ in ~DIR~ (defaults to the current
 directory).
 
-*Until the first tagged release exists, use ~--vendor~.* It additionally
-writes a local ~EcsSchema.pkl~ next to ~mytask.pkl~, which ~amends~ that
-file instead of a package URL — fully offline, no network fetch, and it
-works today with no dependency on a published release:
+~--vendor~ additionally writes a local ~EcsSchema.pkl~ next to ~mytask.pkl~,
+which ~amends~ that file instead of a package URL. This mode is fully offline
+and remains useful for air-gapped hosts or hermetic CI:
 
 #+begin_src console
 $ ecs-task-def init --vendor
@@ -61,22 +69,15 @@ created ./EcsSchema.pkl
 Plain ~init~ (no ~--vendor~) instead makes ~mytask.pkl~ ~amends~ the
 versioned package URL
 ~package://pkg.pkl-lang.org/github.com/djgoku/aws-ecs-task-definition-generator/ecs-task-def@X.Y.Z#/EcsSchema.pkl~,
-where ~X.Y.Z~ is the running binary's version. That scaffold is created
-successfully right now, but the subsequent ~generate~ only succeeds once a
-matching ~ecs-task-def@X.Y.Z~ release has been published (see Releasing
-below) — until then ~pkl eval~ fails fetching the package zip over HTTPS
-(currently a 404, since no release exists yet). Once a release is published,
-the first ~generate~ fetches the schema over HTTPS and pkl caches it locally
-(offline after that):
+where ~X.Y.Z~ is the running binary's version. The first ~generate~ fetches
+the matching schema package over HTTPS and pkl caches it locally for later
+offline use:
 
 #+begin_src console
 $ ecs-task-def init
 created ./mytask.pkl
 next: set your env vars and run `ecs-task-def generate ./mytask.pkl`
 #+end_src
-
-~--vendor~ remains useful after the first release too, for air-gapped hosts
-or hermetic CI that shouldn't depend on network access.
 
 ~init~ never overwrites: if any target file already exists it exits 6,
 lists the conflicting paths, and writes nothing.
