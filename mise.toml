@@ -234,13 +234,16 @@ fi
 '''
 
 [tasks.release-publish-binaries]
-description = "Upload this host OS's two Burrito binaries to the GitHub release"
+description = "Upload this host OS's two Burrito binaries and SHA-256 sidecars"
 depends = ["release-validate-tag", "release-check-binaries"]
 shell = "bash -c"
 run = '''
 set -euo pipefail
 
-mise run release-ensure
+if ! command -v shasum >/dev/null 2>&1; then
+  echo "::error::shasum is required to generate binary SHA-256 sidecars" >&2
+  exit 1
+fi
 
 tag="${RELEASE_TAG:-}"
 case "$(uname -s)" in
@@ -252,14 +255,28 @@ case "$(uname -s)" in
     ;;
 esac
 
+asset_dir="$(mktemp -d "${TMPDIR:-/tmp}/ecs-task-def-release.XXXXXX")"
+trap 'rm -rf "$asset_dir"' EXIT
+
 bins=(
   "burrito_out/ecs_task_def_${release_os}_aarch64"
   "burrito_out/ecs_task_def_${release_os}_x86_64"
 )
+assets=()
 for bin in "${bins[@]}"; do
   name="$(basename "$bin" | sed 's/^ecs_task_def_/ecs-task-def-/')"
-  cp "$bin" "/tmp/$name"
-  gh release upload "$tag" "/tmp/$name" --clobber
+  cp "$bin" "$asset_dir/$name"
+  (
+    cd "$asset_dir"
+    shasum -a 256 "$name" > "$name.sha256"
+  )
+  assets+=("$asset_dir/$name" "$asset_dir/$name.sha256")
+done
+
+mise run release-ensure
+
+for asset in "${assets[@]}"; do
+  gh release upload "$tag" "$asset" --clobber
 done
 '''
 

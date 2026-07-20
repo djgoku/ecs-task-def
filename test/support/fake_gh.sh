@@ -3,6 +3,7 @@ set -euo pipefail
 
 : "${FAKE_GH_LOG:?FAKE_GH_LOG is required}"
 : "${FAKE_GH_MODE:?FAKE_GH_MODE is required}"
+: "${FAKE_GH_UPLOAD_DIR:?FAKE_GH_UPLOAD_DIR is required}"
 
 {
   printf '%q' "${1:-}"
@@ -32,6 +33,16 @@ case "${2:-}" in
     esac
     ;;
   upload)
+    if [ "$#" -ne 5 ] || [ "${5:-}" != "--clobber" ]; then
+      exit 64
+    fi
+
+    asset="${4:-}"
+    if [ ! -f "$asset" ]; then
+      exit 66
+    fi
+
+    cp "$asset" "$FAKE_GH_UPLOAD_DIR/$(basename "$asset")"
     exit 0
     ;;
   *)
