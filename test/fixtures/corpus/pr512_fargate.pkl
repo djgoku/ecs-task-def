@@ -1,0 +1,27 @@
+// Ported from check-jsonschema PR #512 (closed unmerged, djgoku/check-jsonschema
+// @ c81ed4f8d3c060ee6155bff9270729272856bd25 — the PR's own head branch was
+// deleted after closing, but the commit is still reachable by SHA):
+// tests/example-files/hooks/positive/amazon-ecs-intellisense-schema/fargate.json
+amends "../../../pkl/EcsSchema.pkl"
+
+requiresCompatibilities { "EXTERNAL" }
+networkMode = "bridge"
+family = "nginx"
+tags {}
+
+containerDefinitions {
+  new {
+    name = "nginx"
+    image = "public.ecr.aws/nginx/nginx:latest"
+    memory = 256
+    cpu = 256
+    essential = true
+    portMappings {
+      new {
+        containerPort = 80
+        hostPort = 8080
+        protocol = "tcp"
+      }
+    }
+  }
+}

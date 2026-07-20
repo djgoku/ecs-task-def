@@ -1,0 +1,38 @@
+// Ported from the AWS ECS developer guide, "Example Amazon ECS task
+// definitions" > "Windows sample task definitions" > "Example Amazon ECS
+// Console Sample Application for Windows":
+// https://docs.aws.amazon.com/AmazonECS/latest/developerguide/example_task_definitions.html
+// Extracted verbatim (HTML tags stripped, entities unescaped) from the
+// page's <pre class="programlisting"> block. This is the only Windows
+// example on that page; it has no logConfiguration/awslogs block, so there
+// is no separate "docs_awslogs" example to port — named docs_windows here
+// instead.
+amends "../../../pkl/EcsSchema.pkl"
+
+family = "windows-simple-iis"
+networkMode = "awsvpc"
+memory = "1024"
+cpu = "1024"
+
+containerDefinitions {
+  new {
+    name = "windows_sample_app"
+    image = "mcr.microsoft.com/windows/servercore/iis"
+    cpu = 1024
+    entryPoint {
+      "powershell"
+      "-Command"
+    }
+    command {
+      #"New-Item -Path C:\inetpub\wwwroot\index.html -Type file -Value '<html> <head> <title>Amazon ECS Sample App</title> <style>body {margin-top: 40px; background-color: #333;} </style> </head><body> <div style=color:white;text-align:center> <h1>Amazon ECS Sample App</h1> <h2>Congratulations!</h2> <p>Your application is now running on a container in Amazon ECS.</p>'; C:\ServiceMonitor.exe w3svc"#
+    }
+    portMappings {
+      new {
+        protocol = "tcp"
+        containerPort = 80
+      }
+    }
+    memory = 1024
+    essential = true
+  }
+}

@@ -1,0 +1,65 @@
+// Ported from aws-samples/aws-containers-task-definitions wildfly/wildfly_fargate.json
+amends "../../../pkl/EcsSchema.pkl"
+
+// See nginx_fargate.pkl for why logConfiguration.options needs a converter.
+//
+// The upstream JSON also has a redundant `"ulimits": null` key on the
+// container. Pkl's JSON renderer omits null-valued properties whether they
+// are unset or set explicitly to null (validated: both forms produce
+// identical output), so no Pkl port can reproduce that literal null key
+// without also forcing every other unset field in this document to render
+// as an explicit null (a document-wide renderer toggle, not scopable to one
+// property). It is also invalid per the awslabs schema, which types
+// `ulimits` as `array` only (validated: `EcsTaskDef.Validator.validate/1`
+// rejects the raw upstream JSON with "Expected Array but got Null" at
+// containerDefinitions[0].ulimits). `ulimits` is left unset here; the
+// corpus test drops null-valued keys from both sides before comparing.
+output {
+  renderer = new JsonRenderer {
+    converters {
+      ["logConfiguration.options"] = (_) -> new Mapping {
+        ["awslogs-group"] = "/ecs/wildfly"
+        ["awslogs-region"] = "us-east-1"
+        ["awslogs-stream-prefix"] = "ecs"
+      }
+    }
+  }
+}
+
+requiresCompatibilities { "FARGATE" }
+memory = "1024"
+networkMode = "awsvpc"
+cpu = "512"
+family = "wildfly"
+
+containerDefinitions {
+  new {
+    portMappings {
+      new {
+        hostPort = 8080
+        containerPort = 8080
+        protocol = "tcp"
+      }
+      new {
+        hostPort = 9990
+        containerPort = 9990
+        protocol = "tcp"
+      }
+    }
+    essential = true
+    name = "wildfly"
+    image = "jboss/wildfly"
+    command {
+      "/opt/jboss/wildfly/bin/standalone.sh"
+      "-bmanagement"
+      "0.0.0.0"
+      "-b"
+      "0.0.0.0"
+    }
+    logConfiguration {
+      logDriver = "awslogs"
+    }
+    cpu = 512
+    memory = 1024
+  }
+}

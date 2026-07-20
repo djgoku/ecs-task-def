@@ -1,0 +1,38 @@
+// Ported from aws-samples/aws-containers-task-definitions tomcat/tomcat_ec2.json
+amends "../../../pkl/EcsSchema.pkl"
+
+// See nginx_fargate.pkl for why logConfiguration.options needs a converter.
+// Note: this EC2 variant's logConfiguration.options has no awslogs-stream-prefix key.
+output {
+  renderer = new JsonRenderer {
+    converters {
+      ["logConfiguration.options"] = (_) -> new Mapping {
+        ["awslogs-group"] = "/ecs/tomcat-container-logs"
+        ["awslogs-region"] = "us-east-1"
+      }
+    }
+  }
+}
+
+networkMode = "awsvpc"
+family = "tomcat-webserver"
+
+containerDefinitions {
+  new {
+    essential = true
+    name = "tomcat-webserver"
+    image = "tomcat"
+    memory = 2048
+    cpu = 1024
+    portMappings {
+      new {
+        hostPort = 80
+        containerPort = 8080
+        protocol = "tcp"
+      }
+    }
+    logConfiguration {
+      logDriver = "awslogs"
+    }
+  }
+}

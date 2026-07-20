@@ -1,0 +1,40 @@
+// Ported from aws-samples/aws-containers-task-definitions tomcat/tomcat_fargate.json
+amends "../../../pkl/EcsSchema.pkl"
+
+// See nginx_fargate.pkl for why logConfiguration.options needs a converter.
+output {
+  renderer = new JsonRenderer {
+    converters {
+      ["logConfiguration.options"] = (_) -> new Mapping {
+        ["awslogs-group"] = "/ecs/tomcat-container-logs"
+        ["awslogs-region"] = "us-east-1"
+        ["awslogs-stream-prefix"] = "ecs"
+      }
+    }
+  }
+}
+
+memory = "2048"
+family = "tomcat-webserver"
+networkMode = "awsvpc"
+cpu = "1024"
+requiresCompatibilities { "FARGATE" }
+
+containerDefinitions {
+  new {
+    portMappings {
+      new {
+        protocol = "tcp"
+        containerPort = 8080
+      }
+    }
+    cpu = 1024
+    memory = 256
+    image = "tomcat"
+    essential = true
+    name = "tomcat-webserver"
+    logConfiguration {
+      logDriver = "awslogs"
+    }
+  }
+}

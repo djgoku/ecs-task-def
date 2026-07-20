@@ -1,0 +1,58 @@
+// Ported from aws-samples/aws-containers-task-definitions consul/ConsulClient.json
+// (directory listing shows ConsulClient.json/ConsulServer.json, not the
+// consul_ec2/consul_fargate naming used by the other apps in that repo)
+amends "../../../pkl/EcsSchema.pkl"
+
+// See nginx_fargate.pkl for why logConfiguration.options and dockerLabels
+// need a converter instead of ordinary amending.
+output {
+  renderer = new JsonRenderer {
+    converters {
+      ["logConfiguration.options"] = (_) -> new Mapping {
+        ["awslogs-group"] = "consul"
+        ["awslogs-region"] = "us-east-2"
+        ["awslogs-stream-prefix"] = "consulClient"
+      }
+      ["dockerLabels"] = (_) -> new Mapping {
+        ["Name"] = "consulClient"
+      }
+    }
+  }
+}
+
+family = "consulClient"
+networkMode = "host"
+
+containerDefinitions {
+  new {
+    name = "consulClient"
+    image = "consul"
+    cpu = 128
+    memory = 256
+    memoryReservation = 64
+    entryPoint {
+      "/usr/local/bin/docker-entrypoint.sh"
+    }
+    command {
+      "agent"
+      "-client=0.0.0.0"
+      "-data-dir=/consul/data"
+      "-ui"
+      "-retry-join"
+      "provider=aws tag_key=consul tag_value=member"
+    }
+    environment {
+      new {
+        name = "CONSUL_BIND_INTERFACE"
+        value = "eth0"
+      }
+      new {
+        name = "enable_debug"
+        value = "true"
+      }
+    }
+    logConfiguration {
+      logDriver = "awslogs"
+    }
+  }
+}

@@ -1,0 +1,196 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pin the action version: mise 2026.6.7 shipped no macOS build once
+      # (knowledge-base/mise.md); the committed mise.lock pins tool versions.
+      #
+      # install: false — mise-action auto-appends `--locked` to `mise install`
+      # whenever a mise.lock is present (jdx/mise-action README). The
+      # committed lock's `conda:xz-tools` entry has no per-platform lockfile
+      # URL (only version + backend + channel option), so strict `--locked`
+      # fails even on macOS: validated locally via a fresh clone + fresh
+      # MISE_DATA_DIR, `mise install --locked --dry-run` errored with
+      # "No lockfile URL found for conda:xz-tools@5.8.3 on platform
+      # macos-arm64 (--locked mode)". A plain (non-strict) `mise install`
+      # still honors the lock's pinned tool versions but resolves
+      # conda:xz-tools' download URL over the network instead of requiring
+      # one to already exist in the lock — validated locally (succeeds,
+      # installs xz-tools 5.8.3) and conda-forge confirms a linux-64 build
+      # of xz-tools 5.8.3 exists for the ubuntu-latest runner's architecture.
+      # mise-action still installs the mise binary and adds its shims dir to
+      # PATH regardless of `install:`, so tools installed by the step below
+      # are found by later `run:` steps without an `mise exec --` wrapper.
+      - uses: jdx/mise-action@v4
+        with:
+          version: 2026.7.0
+          install: false
+
+      - name: mise install (non-strict; see comment above)
+        run: mise install
+
+      - name: Restore deps cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ matrix.os }}-${{ hashFiles('mix.lock') }}
+
+      - run: mix deps.get
+      - run: mix compile --warnings-as-errors
+      - run: mix test
+
+      - name: Regen drift check (schema + generated Pkl module in sync with pin)
+        run: mix ecs.regen_schema --check
+
+      - name: check-jsonschema cross-validation of golden corpus
+        run: |
+          # pipx is preinstalled on GitHub runners and sidesteps PEP-668
+          # externally-managed-environment errors that break plain pip installs.
+          # Pinned to 0.36.2: the version validated (knowledge-base/pkl.md)
+          # to handle this schema's two \p{L} Unicode-property patterns,
+          # which raw python-jsonschema cannot even compile.
+          pipx install check-jsonschema==0.36.2
+
+          corpus_dir="test/fixtures/corpus"
+          negative_fixture="test/fixtures/negative/pr512_invalid.json"
+
+          # wildfly_fargate's raw golden is byte-preserved upstream JSON
+          # carrying a literal "ulimits": null, which the pinned schema
+          # correctly rejects (test/integration/corpus_test.exs asserts the
+          # same rejection). Every other golden must independently validate.
+          exception="$corpus_dir/wildfly_fargate.golden.json"
+
+          all_goldens=("$corpus_dir"/*.golden.json)
+          valid_goldens=()
+          found_exception=0
+          for f in "${all_goldens[@]}"; do
+            if [ "$f" = "$exception" ]; then
+              found_exception=1
+              continue
+            fi
+            valid_goldens+=("$f")
+          done
+
+          if [ "$found_exception" -ne 1 ]; then
+            echo "expected $exception to exist in the corpus; update this exception if the fixture moved" >&2
+            exit 1
+          fi
+
+          echo "Validating ${#valid_goldens[@]} schema-valid golden fixtures..."
+          check-jsonschema --schemafile priv/schema.json "${valid_goldens[@]}"
+
+          # check-jsonschema exits 1 both for genuine schema-validation failures
+          # and for unrelated tool errors (malformed/unreadable instance JSON, a
+          # missing schema file, ...). A bare `if check-jsonschema ...; then
+          # fail; fi` guard can't tell those apart, so it would silently "pass"
+          # on a broken fixture instead of proving the documented rejection.
+          # Use -o json and inspect the structured report: parse_errors must be
+          # empty (else it's a tool/data error, not a schema rejection) and the
+          # specific documented violation must be present among the reported
+          # errors.
+          assert_rejected() {
+            local file="$1" label="$2"
+            local out err status=0
+            out="$(mktemp)"
+            err="$(mktemp)"
+            check-jsonschema --schemafile priv/schema.json -o json "$file" >"$out" 2>"$err" || status=$?
+
+            {
+              echo "----- check-jsonschema stdout for $label ($file) -----"
+              cat "$out"
+              echo "----- check-jsonschema stderr for $label ($file) -----"
+              cat "$err"
+              echo "----- exit code: $status -----"
+            } >&2
+            rm -f "$err"
+
+            if [ "$status" -eq 0 ]; then
+              echo "expected $file to FAIL schema validation but it passed" >&2
+              rm -f "$out"
+              exit 1
+            fi
+
+            echo "$out"
+          }
+
+          echo "Confirming the raw wildfly_fargate golden (literal \"ulimits\": null) is rejected because containerDefinitions[0].ulimits is not an array..."
+          wildfly_report="$(assert_rejected "$exception" "wildfly_fargate ulimits rejection")"
+          python3 - "$wildfly_report" <<'PYEOF'
+          import json
+          import sys
+
+          with open(sys.argv[1]) as fh:
+              data = json.load(fh)
+
+          if data.get("parse_errors"):
+              sys.exit(
+                  "instance failed to parse (tool/data error, not a schema rejection): "
+                  + repr(data["parse_errors"])
+              )
+
+          errors = data.get("errors", [])
+          ok = any(
+              e.get("path") == "$.containerDefinitions[0].ulimits"
+              and "is not of type 'array'" in e.get("message", "")
+              for e in errors
+          )
+          if not ok:
+              sys.exit(
+                  "expected a containerDefinitions[0].ulimits type-mismatch (null is not an "
+                  "array) error; got: " + repr(errors)
+              )
+          print("confirmed: containerDefinitions[0].ulimits null-vs-array rejection")
+          PYEOF
+          rm -f "$wildfly_report"
+
+          echo "Confirming the negative PR512 seed is rejected because family and containerDefinitions are missing..."
+          pr512_report="$(assert_rejected "$negative_fixture" "PR512 missing required properties rejection")"
+          python3 - "$pr512_report" <<'PYEOF'
+          import json
+          import sys
+
+          with open(sys.argv[1]) as fh:
+              data = json.load(fh)
+
+          if data.get("parse_errors"):
+              sys.exit(
+                  "instance failed to parse (tool/data error, not a schema rejection): "
+                  + repr(data["parse_errors"])
+              )
+
+          errors = data.get("errors", [])
+          required = ["family", "containerDefinitions"]
+          missing = [
+              prop
+              for prop in required
+              if not any(
+                  e.get("path") == "$" and f"'{prop}' is a required property" in e.get("message", "")
+                  for e in errors
+              )
+          ]
+          if missing:
+              sys.exit(
+                  f"expected root-level required-property errors for {required}; missing "
+                  f"{missing}; got: {errors!r}"
+              )
+          print("confirmed: root document is missing the required family/containerDefinitions properties")
+          PYEOF
+          rm -f "$pr512_report"
