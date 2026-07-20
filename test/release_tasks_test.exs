@@ -15,10 +15,12 @@ defmodule EcsTaskDef.ReleaseTasksTest do
     bin_dir = Path.join(fixture, "bin")
     state_dir = Path.join(fixture, "state")
     gh_log = Path.join(fixture, "gh.log")
+    upload_dir = Path.join(fixture, "uploads")
 
     File.mkdir_p!(Path.join(fixture, "pkl"))
     File.mkdir_p!(bin_dir)
     File.mkdir_p!(state_dir)
+    File.mkdir_p!(upload_dir)
     File.cp!(Path.join(@repo_root, "mise.toml"), Path.join(fixture, "mise.toml"))
     File.cp!(Path.join(@repo_root, "mix.exs"), Path.join(fixture, "mix.exs"))
 
@@ -31,12 +33,6 @@ defmodule EcsTaskDef.ReleaseTasksTest do
     File.cp!(Path.join(@repo_root, "test/support/fake_gh.sh"), fake_gh)
     File.chmod!(fake_gh, 0o755)
 
-    # Binary publishing intentionally uses stable /tmp asset names. Avoid
-    # touching a developer's existing files while still exercising the real
-    # task's renaming and gh-upload argument construction.
-    fake_cp = Path.join(bin_dir, "cp")
-    File.write!(fake_cp, "#!/usr/bin/env bash\nset -euo pipefail\n[ \"$#\" -eq 2 ]\n")
-    File.chmod!(fake_cp, 0o755)
     File.write!(gh_log, "")
 
     on_exit(fn -> File.rm_rf(fixture) end)
@@ -45,7 +41,8 @@ defmodule EcsTaskDef.ReleaseTasksTest do
       bin_dir: bin_dir,
       fixture: fixture,
       gh_log: gh_log,
-      state_dir: state_dir
+      state_dir: state_dir,
+      upload_dir: upload_dir
     }
   end
 
@@ -85,17 +82,56 @@ defmodule EcsTaskDef.ReleaseTasksTest do
            ]
   end
 
-  test "release-publish-binaries uploads the two exact renamed host binaries", context do
+  test "release-publish-binaries uploads exact binaries and valid SHA-256 sidecars",
+       context do
     create_valid_binaries(context.fixture)
 
     {output, status} = run_task(context, "release-publish-binaries", "create-ok")
 
     assert status == 0, output
+    assert uploaded_asset_names(context) == binary_asset_names()
 
-    assert upload_lines(context) ==
-             Enum.map(["aarch64", "x86_64"], fn arch ->
-               "release upload #{@release_tag} /tmp/ecs-task-def-#{host_os()}_#{arch} --clobber"
-             end)
+    shasum = System.find_executable("shasum") || raise "shasum is required"
+
+    for arch <- ["aarch64", "x86_64"] do
+      name = "ecs-task-def-#{host_os()}_#{arch}"
+      source = File.read!(binary_path(context.fixture, arch))
+      captured_binary = Path.join(context.upload_dir, name)
+      captured_checksum = Path.join(context.upload_dir, "#{name}.sha256")
+
+      assert File.read!(captured_binary) == source
+
+      digest =
+        source
+        |> then(&:crypto.hash(:sha256, &1))
+        |> Base.encode16(case: :lower)
+
+      assert File.read!(captured_checksum) == "#{digest}  #{name}\n"
+
+      {check_output, check_status} =
+        System.cmd(shasum, ["-a", "256", "-c", "#{name}.sha256"],
+          cd: context.upload_dir,
+          stderr_to_stdout: true
+        )
+
+      assert check_status == 0, check_output
+      assert check_output =~ "#{name}: OK"
+    end
+  end
+
+  test "release-publish-binaries stops before GitHub mutation when shasum fails",
+       context do
+    create_valid_binaries(context.fixture)
+
+    fake_shasum = Path.join(context.bin_dir, "shasum")
+    File.write!(fake_shasum, "#!/usr/bin/env bash\nexit 73\n")
+    File.chmod!(fake_shasum, 0o755)
+
+    {output, status} = run_task(context, "release-publish-binaries", "create-ok")
+
+    assert status != 0, "checksum failure unexpectedly succeeded:\n#{output}"
+    assert_no_github_mutation(context, :checksum_failure)
+    assert File.ls!(context.upload_dir) == []
   end
 
   for scenario <- [:extra, :missing, :wrong_name, :directory, :symlink, :non_executable] do
@@ -177,6 +213,7 @@ defmodule EcsTaskDef.ReleaseTasksTest do
     env = [
       {"FAKE_GH_LOG", context.gh_log},
       {"FAKE_GH_MODE", mode},
+      {"FAKE_GH_UPLOAD_DIR", context.upload_dir},
       {"GH_TOKEN", "fake-token"},
       {"MISE_AUTO_INSTALL", "0"},
       {"MISE_DISABLE_TOOLS", "gh"},
@@ -312,6 +349,21 @@ defmodule EcsTaskDef.ReleaseTasksTest do
 
   defp upload_lines(context) do
     Enum.filter(gh_lines(context), &String.starts_with?(&1, "release upload "))
+  end
+
+  defp binary_asset_names do
+    for arch <- ["aarch64", "x86_64"],
+        suffix <- ["", ".sha256"] do
+      "ecs-task-def-#{host_os()}_#{arch}#{suffix}"
+    end
+  end
+
+  defp uploaded_asset_names(context) do
+    Enum.map(upload_lines(context), fn line ->
+      ["release", "upload", @release_tag, path, "--clobber"] = String.split(line)
+
+      Path.basename(path)
+    end)
   end
 
   defp assert_no_github_mutation(context, scenario) do
