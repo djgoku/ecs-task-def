@@ -1,0 +1,334 @@
+defmodule EcsTaskDef.ReleaseTasksTest do
+  use ExUnit.Case, async: false
+
+  @repo_root Path.expand("..", __DIR__)
+  @release_tag "ecs-task-def@0.1.0"
+  @version "0.1.0"
+
+  setup do
+    fixture =
+      Path.join(
+        System.tmp_dir!(),
+        "ecs-task-def-release-tasks-#{System.unique_integer([:positive])}"
+      )
+
+    bin_dir = Path.join(fixture, "bin")
+    state_dir = Path.join(fixture, "state")
+    gh_log = Path.join(fixture, "gh.log")
+
+    File.mkdir_p!(Path.join(fixture, "pkl"))
+    File.mkdir_p!(bin_dir)
+    File.mkdir_p!(state_dir)
+    File.cp!(Path.join(@repo_root, "mise.toml"), Path.join(fixture, "mise.toml"))
+    File.cp!(Path.join(@repo_root, "mix.exs"), Path.join(fixture, "mix.exs"))
+
+    File.cp!(
+      Path.join(@repo_root, "pkl/PklProject"),
+      Path.join(fixture, "pkl/PklProject")
+    )
+
+    fake_gh = Path.join(bin_dir, "gh")
+    File.cp!(Path.join(@repo_root, "test/support/fake_gh.sh"), fake_gh)
+    File.chmod!(fake_gh, 0o755)
+
+    # Binary publishing intentionally uses stable /tmp asset names. Avoid
+    # touching a developer's existing files while still exercising the real
+    # task's renaming and gh-upload argument construction.
+    fake_cp = Path.join(bin_dir, "cp")
+    File.write!(fake_cp, "#!/usr/bin/env bash\nset -euo pipefail\n[ \"$#\" -eq 2 ]\n")
+    File.chmod!(fake_cp, 0o755)
+    File.write!(gh_log, "")
+
+    on_exit(fn -> File.rm_rf(fixture) end)
+
+    %{
+      bin_dir: bin_dir,
+      fixture: fixture,
+      gh_log: gh_log,
+      state_dir: state_dir
+    }
+  end
+
+  test "release-ensure creates the full release tag", context do
+    {output, status} = run_task(context, "release-ensure", "create-ok")
+
+    assert status == 0, output
+
+    assert gh_lines(context) == [
+             "release create #{@release_tag} --verify-tag --title #{@release_tag} " <>
+               "--notes Automated\\ release\\ for\\ #{@release_tag}."
+           ]
+  end
+
+  test "release-ensure accepts a create-create race only after viewing the release", context do
+    {output, status} = run_task(context, "release-ensure", "create-race")
+
+    assert status == 0, output
+
+    assert gh_lines(context) == [
+             "release create #{@release_tag} --verify-tag --title #{@release_tag} " <>
+               "--notes Automated\\ release\\ for\\ #{@release_tag}.",
+             "release view #{@release_tag}"
+           ]
+  end
+
+  test "release-ensure rejects a fatal create failure", context do
+    {output, status} = run_task(context, "release-ensure", "create-fatal")
+
+    assert status != 0
+    assert output =~ "::error::gh release create failed and no release exists"
+
+    assert gh_lines(context) == [
+             "release create #{@release_tag} --verify-tag --title #{@release_tag} " <>
+               "--notes Automated\\ release\\ for\\ #{@release_tag}.",
+             "release view #{@release_tag}"
+           ]
+  end
+
+  test "release-publish-binaries uploads the two exact renamed host binaries", context do
+    create_valid_binaries(context.fixture)
+
+    {output, status} = run_task(context, "release-publish-binaries", "create-ok")
+
+    assert status == 0, output
+
+    assert upload_lines(context) ==
+             Enum.map(["aarch64", "x86_64"], fn arch ->
+               "release upload #{@release_tag} /tmp/ecs-task-def-#{host_os()}_#{arch} --clobber"
+             end)
+  end
+
+  for scenario <- [:extra, :missing, :wrong_name, :directory, :symlink, :non_executable] do
+    test "release-publish-binaries rejects #{scenario} artifacts before GitHub mutation",
+         context do
+      scenario = unquote(scenario)
+      create_valid_binaries(context.fixture)
+      mutate_binaries(context.fixture, scenario)
+
+      {output, status} = run_task(context, "release-publish-binaries", "create-ok")
+
+      assert status != 0, "#{scenario} unexpectedly succeeded:\n#{output}"
+      assert_no_github_mutation(context, scenario)
+    end
+  end
+
+  test "release-publish-pkl uploads the four exact versioned package artifacts", context do
+    create_valid_pkl_artifacts(context.fixture)
+
+    {output, status} = run_task(context, "release-publish-pkl", "create-ok")
+
+    assert status == 0, output
+
+    expected =
+      Enum.map(pkl_artifact_names(), fn name ->
+        "release upload #{@release_tag} pkl/.out/ecs-task-def@#{@version}/#{name} --clobber"
+      end)
+
+    assert upload_lines(context) == expected
+  end
+
+  for scenario <- [:extra, :missing, :wrong_name, :directory, :symlink, :unreadable] do
+    test "release-publish-pkl rejects #{scenario} artifacts before GitHub mutation", context do
+      scenario = unquote(scenario)
+      create_valid_pkl_artifacts(context.fixture)
+      mutate_pkl_artifacts(context.fixture, scenario)
+
+      {output, status} = run_task(context, "release-publish-pkl", "create-ok")
+
+      assert status != 0, "#{scenario} unexpectedly succeeded:\n#{output}"
+      assert_no_github_mutation(context, scenario)
+    end
+  end
+
+  test "release-validate-tag reports a focused diagnostic when the Mix version is missing",
+       context do
+    mix_file = Path.join(context.fixture, "mix.exs")
+
+    mix_file
+    |> File.read!()
+    |> String.replace(~r/^\s*version:\s*"[^"]+",$/m, "      # version intentionally absent")
+    |> then(&File.write!(mix_file, &1))
+
+    {output, status} = run_task(context, "release-validate-tag", "create-ok")
+
+    assert status != 0
+    assert output =~ "::error::could not parse version from mix.exs ('')"
+  end
+
+  test "release-validate-tag reports a focused diagnostic when the Pkl version is missing",
+       context do
+    project_file = Path.join(context.fixture, "pkl/PklProject")
+
+    project_file
+    |> File.read!()
+    |> String.replace(~r/^\s*version = "[^"]+".*$/m, "  // version intentionally absent")
+    |> then(&File.write!(project_file, &1))
+
+    {output, status} = run_task(context, "release-validate-tag", "create-ok")
+
+    assert status != 0
+    assert output =~ "or pkl/PklProject ('')"
+  end
+
+  defp run_task(context, task, mode) do
+    mise = System.find_executable("mise") || raise "mise is required for release task tests"
+    File.write!(context.gh_log, "")
+
+    env = [
+      {"FAKE_GH_LOG", context.gh_log},
+      {"FAKE_GH_MODE", mode},
+      {"GH_TOKEN", "fake-token"},
+      {"MISE_AUTO_INSTALL", "0"},
+      {"MISE_DISABLE_TOOLS", "gh"},
+      {"MISE_TRUSTED_CONFIG_PATHS", Path.join(context.fixture, "mise.toml")},
+      {"PATH", context.bin_dir <> ":" <> System.fetch_env!("PATH")},
+      {"RELEASE_TAG", @release_tag},
+      {"XDG_STATE_HOME", context.state_dir}
+    ]
+
+    System.cmd(mise, ["run", task],
+      cd: context.fixture,
+      env: env,
+      stderr_to_stdout: true
+    )
+  end
+
+  defp create_valid_binaries(fixture) do
+    directory = Path.join(fixture, "burrito_out")
+    File.mkdir_p!(directory)
+
+    for path <- binary_paths(fixture) do
+      File.write!(path, "binary fixture\n")
+      File.chmod!(path, 0o755)
+    end
+  end
+
+  defp mutate_binaries(fixture, :extra) do
+    path = Path.join(fixture, "burrito_out/ecs_task_def_#{host_os()}_debug")
+    File.write!(path, "extra\n")
+    File.chmod!(path, 0o755)
+  end
+
+  defp mutate_binaries(fixture, :missing) do
+    fixture |> binary_path("x86_64") |> File.rm!()
+  end
+
+  defp mutate_binaries(fixture, :wrong_name) do
+    source = binary_path(fixture, "x86_64")
+    File.rename!(source, Path.join(Path.dirname(source), "ecs_task_def_#{host_os()}_amd64"))
+  end
+
+  defp mutate_binaries(fixture, :directory) do
+    path = binary_path(fixture, "x86_64")
+    File.rm!(path)
+    File.mkdir!(path)
+  end
+
+  defp mutate_binaries(fixture, :symlink) do
+    path = binary_path(fixture, "x86_64")
+    target = Path.join(fixture, "binary-symlink-target")
+    File.rm!(path)
+    File.write!(target, "target\n")
+    File.chmod!(target, 0o755)
+    File.ln_s!(target, path)
+  end
+
+  defp mutate_binaries(fixture, :non_executable) do
+    fixture |> binary_path("x86_64") |> File.chmod!(0o644)
+  end
+
+  defp binary_paths(fixture) do
+    Enum.map(["aarch64", "x86_64"], &binary_path(fixture, &1))
+  end
+
+  defp binary_path(fixture, arch) do
+    Path.join(fixture, "burrito_out/ecs_task_def_#{host_os()}_#{arch}")
+  end
+
+  defp create_valid_pkl_artifacts(fixture) do
+    directory = pkl_artifact_directory(fixture)
+    File.mkdir_p!(directory)
+
+    for name <- pkl_artifact_names() do
+      File.write!(Path.join(directory, name), "package fixture\n")
+    end
+  end
+
+  defp mutate_pkl_artifacts(fixture, :extra) do
+    File.write!(Path.join(pkl_artifact_directory(fixture), "unexpected"), "extra\n")
+  end
+
+  defp mutate_pkl_artifacts(fixture, :missing) do
+    fixture |> pkl_artifact_path("ecs-task-def@#{@version}.zip.sha256") |> File.rm!()
+  end
+
+  defp mutate_pkl_artifacts(fixture, :wrong_name) do
+    source = pkl_artifact_path(fixture, "ecs-task-def@#{@version}.zip")
+    File.rename!(source, Path.join(Path.dirname(source), "ecs-task-def@#{@version}.tgz"))
+  end
+
+  defp mutate_pkl_artifacts(fixture, :directory) do
+    path = pkl_artifact_path(fixture, "ecs-task-def@#{@version}.zip")
+    File.rm!(path)
+    File.mkdir!(path)
+  end
+
+  defp mutate_pkl_artifacts(fixture, :symlink) do
+    path = pkl_artifact_path(fixture, "ecs-task-def@#{@version}.zip")
+    target = Path.join(fixture, "pkl-symlink-target")
+    File.rm!(path)
+    File.write!(target, "target\n")
+    File.ln_s!(target, path)
+  end
+
+  defp mutate_pkl_artifacts(fixture, :unreadable) do
+    fixture
+    |> pkl_artifact_path("ecs-task-def@#{@version}.zip")
+    |> File.chmod!(0o000)
+  end
+
+  defp pkl_artifact_names do
+    [
+      "ecs-task-def@#{@version}",
+      "ecs-task-def@#{@version}.sha256",
+      "ecs-task-def@#{@version}.zip",
+      "ecs-task-def@#{@version}.zip.sha256"
+    ]
+  end
+
+  defp pkl_artifact_directory(fixture) do
+    Path.join(fixture, "pkl/.out/ecs-task-def@#{@version}")
+  end
+
+  defp pkl_artifact_path(fixture, name) do
+    Path.join(pkl_artifact_directory(fixture), name)
+  end
+
+  defp gh_lines(context) do
+    context.gh_log
+    |> File.read!()
+    |> String.split("\n", trim: true)
+  end
+
+  defp upload_lines(context) do
+    Enum.filter(gh_lines(context), &String.starts_with?(&1, "release upload "))
+  end
+
+  defp assert_no_github_mutation(context, scenario) do
+    mutation? = fn line ->
+      String.starts_with?(line, "release create ") or
+        String.starts_with?(line, "release upload ")
+    end
+
+    refute Enum.any?(gh_lines(context), mutation?),
+           "#{scenario} reached release create or release upload:\n#{File.read!(context.gh_log)}"
+  end
+
+  defp host_os do
+    case :os.type() do
+      {:unix, :darwin} -> "macos"
+      {:unix, :linux} -> "linux"
+      other -> raise "unsupported release-task test host: #{inspect(other)}"
+    end
+  end
+end

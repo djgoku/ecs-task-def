@@ -52,6 +52,28 @@ defmodule EcsTaskDef.PklTest do
     assert out == "from-extra\n"
   end
 
+  test "caller cannot override the private stderr capture path" do
+    sentinel =
+      Path.join(
+        System.tmp_dir!(),
+        "pkl-stderr-sentinel-#{System.unique_integer([:positive])}"
+      )
+
+    File.write!(sentinel, "keep me")
+    on_exit(fn -> File.rm(sentinel) end)
+
+    extra_env = [
+      {"FAKE_PKL_STDOUT", "from-extra"},
+      {"FAKE_PKL_STDERR", "captured internally"},
+      {"ECS_TASK_DEF_STDERR_FILE", sentinel}
+    ]
+
+    assert {:ok, "from-extra\n", "captured internally\n"} =
+             Pkl.eval(fake_pkl(), "ignored.pkl", extra_env)
+
+    assert File.read!(sentinel) == "keep me"
+  end
+
   test "forces Pkl diagnostics to retain ANSI colors" do
     assert {:ok, _out, _stderr} =
              Pkl.eval(fake_pkl(), "ignored.pkl", [{"FAKE_PKL_REQUIRE_COLOR_ALWAYS", "1"}])

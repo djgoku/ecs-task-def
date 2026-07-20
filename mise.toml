@@ -108,8 +108,8 @@ if [ "$tag_version" = "$tag" ]; then
   exit 1
 fi
 
-mix_version="$(grep -m1 -E '^[[:space:]]*version:[[:space:]]*"' mix.exs | sed -E 's/.*"([^"]+)".*/\1/')"
-pkl_version="$(grep -m1 -E 'version = "' pkl/PklProject | sed -E 's/.*"([^"]+)".*/\1/')"
+mix_version="$(grep -m1 -E '^[[:space:]]*version:[[:space:]]*"' mix.exs | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+pkl_version="$(grep -m1 -E 'version = "' pkl/PklProject | sed -E 's/.*"([^"]+)".*/\1/' || true)"
 
 if [ -z "$mix_version" ] || [ -z "$pkl_version" ]; then
   echo "::error::could not parse version from mix.exs ('$mix_version') or pkl/PklProject ('$pkl_version')" >&2
@@ -140,13 +140,24 @@ case "$(uname -s)" in
     ;;
 esac
 
+expected=(
+  "burrito_out/ecs_task_def_${release_os}_aarch64"
+  "burrito_out/ecs_task_def_${release_os}_x86_64"
+)
 bins=(burrito_out/ecs_task_def_"${release_os}"_*)
-if [ "{{ "${" }}#bins[@]}" -ne 2 ]; then
-  echo "::error::expected exactly 2 built binaries matching burrito_out/ecs_task_def_${release_os}_*, found {{ "${" }}#bins[@]}: ${bins[*]:-none}" >&2
+if [ "{{ "${" }}#bins[@]}" -ne "{{ "${" }}#expected[@]}" ]; then
+  echo "::error::expected exactly ${expected[*]}, found {{ "${" }}#bins[@]}: ${bins[*]:-none}" >&2
   exit 1
 fi
 
-echo "found exactly 2 Burrito binaries for $release_os"
+for bin in "${expected[@]}"; do
+  if [ -L "$bin" ] || [ ! -f "$bin" ] || [ ! -x "$bin" ]; then
+    echo "::error::expected non-symlink executable regular file: $bin" >&2
+    exit 1
+  fi
+done
+
+echo "found exact executable aarch64 and x86_64 Burrito binaries for $release_os"
 '''
 
 [tasks.release-check-pkl]
@@ -156,13 +167,33 @@ run = '''
 set -euo pipefail
 shopt -s nullglob
 
-assets=(pkl/.out/*/*)
-if [ "{{ "${" }}#assets[@]}" -ne 4 ]; then
-  echo "::error::expected exactly 4 pkl package artifacts (metadata json + zip + their .sha256 sidecars), found {{ "${" }}#assets[@]}: ${assets[*]:-none}" >&2
+pkl_version="$(grep -m1 -E 'version = "' pkl/PklProject | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+if [ -z "$pkl_version" ]; then
+  echo "::error::could not parse version from pkl/PklProject" >&2
   exit 1
 fi
 
-echo "found exactly 4 Pkl package artifacts"
+asset_dir="pkl/.out/ecs-task-def@${pkl_version}"
+expected=(
+  "${asset_dir}/ecs-task-def@${pkl_version}"
+  "${asset_dir}/ecs-task-def@${pkl_version}.sha256"
+  "${asset_dir}/ecs-task-def@${pkl_version}.zip"
+  "${asset_dir}/ecs-task-def@${pkl_version}.zip.sha256"
+)
+assets=(pkl/.out/*/*)
+if [ "{{ "${" }}#assets[@]}" -ne "{{ "${" }}#expected[@]}" ]; then
+  echo "::error::expected exactly ${expected[*]}, found {{ "${" }}#assets[@]}: ${assets[*]:-none}" >&2
+  exit 1
+fi
+
+for asset in "${expected[@]}"; do
+  if [ -L "$asset" ] || [ ! -f "$asset" ] || [ ! -r "$asset" ]; then
+    echo "::error::expected non-symlink readable regular file: $asset" >&2
+    exit 1
+  fi
+done
+
+echo "found exact readable Pkl package artifacts for version $pkl_version"
 '''
 
 [tasks.release-package-pkl]
@@ -208,7 +239,6 @@ depends = ["release-validate-tag", "release-check-binaries"]
 shell = "bash -c"
 run = '''
 set -euo pipefail
-shopt -s nullglob
 
 mise run release-ensure
 
@@ -222,7 +252,10 @@ case "$(uname -s)" in
     ;;
 esac
 
-bins=(burrito_out/ecs_task_def_"${release_os}"_*)
+bins=(
+  "burrito_out/ecs_task_def_${release_os}_aarch64"
+  "burrito_out/ecs_task_def_${release_os}_x86_64"
+)
 for bin in "${bins[@]}"; do
   name="$(basename "$bin" | sed 's/^ecs_task_def_/ecs-task-def-/')"
   cp "$bin" "/tmp/$name"
@@ -236,12 +269,18 @@ depends = ["release-validate-tag", "release-check-pkl"]
 shell = "bash -c"
 run = '''
 set -euo pipefail
-shopt -s nullglob
 
 mise run release-ensure
 
 tag="${RELEASE_TAG:-}"
-assets=(pkl/.out/*/*)
+pkl_version="$(grep -m1 -E 'version = "' pkl/PklProject | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+asset_dir="pkl/.out/ecs-task-def@${pkl_version}"
+assets=(
+  "${asset_dir}/ecs-task-def@${pkl_version}"
+  "${asset_dir}/ecs-task-def@${pkl_version}.sha256"
+  "${asset_dir}/ecs-task-def@${pkl_version}.zip"
+  "${asset_dir}/ecs-task-def@${pkl_version}.zip.sha256"
+)
 for asset in "${assets[@]}"; do
   gh release upload "$tag" "$asset" --clobber
 done

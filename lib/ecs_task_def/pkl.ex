@@ -9,6 +9,9 @@ defmodule EcsTaskDef.Pkl do
   """
 
   def eval(pkl_path, input_path, extra_env) do
+    extra_env =
+      Enum.reject(extra_env, fn {key, _value} -> key == "ECS_TASK_DEF_STDERR_FILE" end)
+
     stderr_file =
       Path.join(
         System.tmp_dir!(),
@@ -29,7 +32,7 @@ defmodule EcsTaskDef.Pkl do
             "json",
             input_path
           ],
-          env: [{"ECS_TASK_DEF_STDERR_FILE", stderr_file} | extra_env]
+          env: extra_env ++ [{"ECS_TASK_DEF_STDERR_FILE", stderr_file}]
         )
 
       stderr =

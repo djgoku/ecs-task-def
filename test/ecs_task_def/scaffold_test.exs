@@ -38,6 +38,28 @@ defmodule EcsTaskDef.ScaffoldTest do
     assert File.read!(Path.join(dir, "EcsSchema.pkl")) == "existing"
   end
 
+  test "does not follow a dangling symlink at a target", %{dir: dir} do
+    target = Path.join(dir, "outside.pkl")
+    task_path = Path.join(dir, "mytask.pkl")
+    File.ln_s!(target, task_path)
+
+    assert {:error, {:write_failed, ^task_path, :eexist}} = Scaffold.init(dir, false)
+    assert {:ok, %File.Stat{type: :symlink}} = File.lstat(task_path)
+    refute File.exists?(target)
+  end
+
+  test "removes only files created before a later exclusive-create conflict", %{dir: dir} do
+    task_path = Path.join(dir, "mytask.pkl")
+    schema_path = Path.join(dir, "EcsSchema.pkl")
+    symlink_target = Path.join(dir, "outside-schema.pkl")
+    File.ln_s!(symlink_target, schema_path)
+
+    assert {:error, {:write_failed, ^schema_path, :eexist}} = Scaffold.init(dir, true)
+    refute File.exists?(task_path)
+    assert {:ok, %File.Stat{type: :symlink}} = File.lstat(schema_path)
+    refute File.exists?(symlink_target)
+  end
+
   test "a missing target directory is created", %{dir: dir} do
     nested = Path.join([dir, "a", "b"])
     assert {:ok, [task_path]} = Scaffold.init(nested, false)

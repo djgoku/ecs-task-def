@@ -27,11 +27,29 @@ defmodule EcsTaskDef.Scaffold do
 
   defp write_all(files) do
     Enum.reduce_while(files, {:ok, []}, fn {path, contents}, {:ok, written} ->
-      case File.write(path, contents) do
-        :ok -> {:cont, {:ok, written ++ [path]}}
-        {:error, reason} -> {:halt, {:error, {:write_failed, path, reason}}}
+      case write_exclusive(path, contents) do
+        :ok ->
+          {:cont, {:ok, written ++ [path]}}
+
+        {:error, reason} ->
+          Enum.each(written, &File.rm/1)
+          {:halt, {:error, {:write_failed, path, reason}}}
       end
     end)
+  end
+
+  defp write_exclusive(path, contents) do
+    case File.open(path, [:write, :exclusive], &IO.binwrite(&1, contents)) do
+      {:ok, :ok} ->
+        :ok
+
+      {:ok, {:error, reason}} ->
+        File.rm(path)
+        {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp files(dir, false) do
