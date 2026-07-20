@@ -235,7 +235,7 @@ defmodule EcsTaskDef.ReleaseTasksTest do
     File.mkdir_p!(directory)
 
     for path <- binary_paths(fixture) do
-      File.write!(path, "binary fixture\n")
+      File.write!(path, "binary fixture for #{Path.basename(path)}\n")
       File.chmod!(path, 0o755)
     end
   end
