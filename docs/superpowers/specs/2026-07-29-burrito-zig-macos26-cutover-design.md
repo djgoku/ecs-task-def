@@ -41,9 +41,10 @@ versions is explicitly deferred until this cutover is complete and assessed.
 will refresh Burrito and any transitive dependencies required by its published
 package while avoiding unrelated dependency upgrades.
 
-`mise.toml` will pin Zig 0.16.0 without the old Burrito-workaround comment.
-The mise lockfile will be regenerated using the repository's normal mise
-workflow so every supported host entry points to Zig 0.16.0 artifacts.
+`mise.toml` will pin Zig 0.16.0 and retain the accurate note that Zig is
+required by Burrito at release-build time. The mise lockfile will be
+regenerated using the repository's normal mise workflow so every supported
+host entry points to Zig 0.16.0 artifacts.
 
 The existing XZ and 7zip build dependencies remain unchanged.
 
@@ -101,4 +102,3 @@ changes will be reverted and the update rerun with a narrower command. If the
 macOS 26 build fails, the shim will not be silently restored; the failure will
 be diagnosed against Burrito 1.6.0 and Zig 0.16.0, and the cutover will remain
 incomplete until the direct build works or a new design is approved.
-
