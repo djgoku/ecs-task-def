@@ -112,13 +112,17 @@ rerun its narrowest command:
 
 ```bash
 git restore --source=HEAD -- mix.lock
+mise exec -- mix deps.unlock burrito
 mise exec -- mix deps.get
 git restore --source=HEAD -- mise.lock
 mise lock zig
 ```
 
-Inspect the diff again. If unrelated changes persist, stop and report them; do
-not hand-edit either lockfile.
+The explicit Burrito unlock follows Mix's documented narrow-upgrade workflow:
+it permits the direct dependency to move without unlocking its already-locked
+children. Inspect the diff again and require `req` to remain at 0.6.3. If
+unrelated changes persist, stop and report them; do not hand-edit either
+lockfile.
 
 - [ ] **Step 4: Verify the selected toolchain and post-install lock**
 
