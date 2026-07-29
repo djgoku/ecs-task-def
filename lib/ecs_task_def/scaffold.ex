@@ -7,7 +7,7 @@ defmodule EcsTaskDef.Scaffold do
   {:write_failed, path, reason}.
   """
 
-  @package_base "package://pkg.pkl-lang.org/github.com/djgoku/aws-ecs-task-definition-generator/ecs-task-def"
+  @package_base "package://pkg.pkl-lang.org/github.com/djgoku/ecs-task-def/ecs-task-def"
 
   def init(dir, vendor?) do
     files = files(dir, vendor?)

@@ -2,8 +2,8 @@ defmodule EcsTaskDef.ReleaseTasksTest do
   use ExUnit.Case, async: false
 
   @repo_root Path.expand("..", __DIR__)
-  @release_tag "ecs-task-def@0.1.0"
-  @version "0.1.0"
+  @version Mix.Project.config()[:version]
+  @release_tag "ecs-task-def@#{@version}"
 
   setup do
     fixture =
