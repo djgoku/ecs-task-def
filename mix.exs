@@ -26,7 +26,7 @@ defmodule EcsTaskDef.MixProject do
       # NOT runtime: false — Burrito.Util.Args is called at runtime by
       # EcsTaskDef.Application, and runtime: false deps are excluded from
       # releases, which would crash the shipped binary.
-      {:burrito, "~> 1.5"}
+      {:burrito, "~> 1.6"}
     ]
   end
 
