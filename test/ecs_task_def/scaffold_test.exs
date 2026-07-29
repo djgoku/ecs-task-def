@@ -3,6 +3,10 @@ defmodule EcsTaskDef.ScaffoldTest do
 
   alias EcsTaskDef.Scaffold
 
+  @repo_root Path.expand("../..", __DIR__)
+  @canonical_package_base "package://pkg.pkl-lang.org/github.com/djgoku/ecs-task-def/ecs-task-def"
+  @canonical_release_base "https://github.com/djgoku/ecs-task-def/releases/download/"
+
   setup do
     dir = Path.join(System.tmp_dir!(), "scaffold-test-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
@@ -17,9 +21,30 @@ defmodule EcsTaskDef.ScaffoldTest do
     version = Application.spec(:ecs_task_def, :vsn) |> to_string()
 
     assert contents =~
-             ~s[amends "package://pkg.pkl-lang.org/github.com/djgoku/aws-ecs-task-definition-generator/ecs-task-def@#{version}#/EcsSchema.pkl"]
+             ~s[amends "package://pkg.pkl-lang.org/github.com/djgoku/ecs-task-def/ecs-task-def@#{version}#/EcsSchema.pkl"]
 
     assert contents =~ ~s[read("env:]
+  end
+
+  test "Pkl metadata and scaffold use the same canonical coordinate", %{dir: dir} do
+    project = File.read!(Path.join(@repo_root, "pkl/PklProject"))
+
+    assert project =~ ~s[baseUri = "#{@canonical_package_base}"]
+    assert project =~ ~s[packageZipUrl = "#{@canonical_release_base}]
+
+    assert [_, package_base] =
+             Regex.run(~r/^\s*baseUri = "([^"]+)"$/m, project)
+
+    assert [_, pkl_version] =
+             Regex.run(~r/^\s*version = "([^"]+)"/m, project)
+
+    app_version = Application.spec(:ecs_task_def, :vsn) |> to_string()
+    assert pkl_version == app_version
+
+    assert {:ok, [task_path]} = Scaffold.init(dir, false)
+
+    assert File.read!(task_path) =~
+             ~s[amends "#{package_base}@#{app_version}#/EcsSchema.pkl"]
   end
 
   test "vendor init writes both files and amends the local module", %{dir: dir} do
