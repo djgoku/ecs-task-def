@@ -318,7 +318,7 @@ Expected: pass with no matches.
 Search the entire active tree while excluding generated dependencies, build output, Git metadata, and historical Superpowers documents:
 
 ```bash
-! rg -n -S '0\.15\.2|Burrito 1\.5|macos-15|bin/xcrun|MacOSX1[45]|compatibility shim' \
+! rg --hidden -n -S '0\.15\.2|Burrito 1\.5|macos-15|bin/xcrun|MacOSX1[45]|compatibility shim' \
   --glob '!docs/superpowers/**' \
   --glob '!deps/**' \
   --glob '!_build/**' \
@@ -440,7 +440,7 @@ Expected: both workflow files contain `macos-26`, and neither contains `macos-15
 Run:
 
 ```bash
-! rg -n -S '0\.15\.2|Burrito 1\.5|macos-15|bin/xcrun|MacOSX1[45]|compatibility shim' \
+! rg --hidden -n -S '0\.15\.2|Burrito 1\.5|macos-15|bin/xcrun|MacOSX1[45]|compatibility shim' \
   --glob '!docs/superpowers/**' \
   --glob '!deps/**' \
   --glob '!_build/**' \
