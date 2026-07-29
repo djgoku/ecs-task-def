@@ -21,7 +21,7 @@ the schema and can still be rejected at registration time.
 [[https://github.com/burrito-elixir/burrito][Burrito]]) for macOS and Linux.
 Download the binary and matching ~.sha256~ file for your platform from this
 repo's
-[[https://github.com/djgoku/aws-ecs-task-definition-generator/releases][GitHub Releases]]
+[[https://github.com/djgoku/ecs-task-def/releases][GitHub Releases]]
 page, verify the download, and put the binary on your ~PATH~:
 
 #+begin_src console
@@ -68,7 +68,7 @@ created ./EcsSchema.pkl
 
 Plain ~init~ (no ~--vendor~) instead makes ~mytask.pkl~ ~amends~ the
 versioned package URL
-~package://pkg.pkl-lang.org/github.com/djgoku/aws-ecs-task-definition-generator/ecs-task-def@X.Y.Z#/EcsSchema.pkl~,
+~package://pkg.pkl-lang.org/github.com/djgoku/ecs-task-def/ecs-task-def@X.Y.Z#/EcsSchema.pkl~,
 where ~X.Y.Z~ is the running binary's version. The first ~generate~ fetches
 the matching schema package over HTTPS and pkl caches it locally for later
 offline use:
@@ -184,5 +184,5 @@ fixture corpus.
 Pushing a tag matching ~ecs-task-def@X.Y.Z~ (must match the version in
 ~mix.exs~) triggers the release workflow, which builds per-platform Burrito
 binaries and packages ~pkl/EcsSchema.pkl~ for the
-~package://pkg.pkl-lang.org/github.com/djgoku/aws-ecs-task-definition-generator/ecs-task-def@X.Y.Z~
+~package://pkg.pkl-lang.org/github.com/djgoku/ecs-task-def/ecs-task-def@X.Y.Z~
 coordinate that scaffolded (non-~--vendor~) ~mytask.pkl~ files ~amends~.
