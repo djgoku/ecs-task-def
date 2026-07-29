@@ -10,7 +10,10 @@
 
 ## Global Constraints
 
-- Burrito must resolve from Hex at exactly 1.6.0 through `{:burrito, "~> 1.6"}`.
+- Keep the approved `{:burrito, "~> 1.6"}` constraint, but require it to
+  resolve to exactly Burrito 1.6.0 for this cutover. If resolution selects any
+  other 1.x release, stop and revalidate that release's Zig requirement before
+  continuing.
 - Zig must be pinned and locked at exactly 0.16.0.
 - Retain the `mise.toml` note that Zig is required by Burrito at release-build time.
 - Preserve `ECS_TASK_DEF_RELEASE_OS` and the existing two-target-per-host behavior.
@@ -49,6 +52,15 @@
 
 - [ ] **Step 1: Record the expected failing version assertions**
 
+Require a clean starting tree:
+
+```bash
+test -z "$(git status --porcelain)"
+```
+
+Expected: pass. If it fails, stop and resolve the existing changes before
+starting the cutover.
+
 Run:
 
 ```bash
@@ -77,8 +89,9 @@ zig = "0.16.0" # required by burrito at release-build time
 Run:
 
 ```bash
-mix deps.update burrito
 mise lock zig
+mise install zig
+mise exec -- mix deps.get
 ```
 
 Expected:
@@ -94,22 +107,38 @@ Inspect the generated diff:
 git diff -- mix.exs mix.lock mise.toml mise.lock
 ```
 
-If unrelated dependencies or tools changed, restore only those unrelated generated records and rerun the narrower lock command before continuing.
+If either generated lock contains unrelated changes, restore that lock and
+rerun its narrowest command:
 
-- [ ] **Step 4: Install and verify the selected toolchain**
+```bash
+git restore --source=HEAD -- mix.lock
+mise exec -- mix deps.get
+git restore --source=HEAD -- mise.lock
+mise lock zig
+```
+
+Inspect the diff again. If unrelated changes persist, stop and report them; do
+not hand-edit either lockfile.
+
+- [ ] **Step 4: Verify the selected toolchain and post-install lock**
 
 Run:
 
 ```bash
-mise install zig
 mise exec -- zig version
-mix deps
+mise exec -- mix deps
+git diff -- mise.lock
+test "$(rg -c '0\.16\.0' mise.lock)" = "8"
+! rg -q '0\.15\.2' mise.lock
 ```
 
 Expected:
 
 - Zig prints exactly `0.16.0`.
-- `mix deps` lists `burrito 1.6.0`.
+- `mix deps` lists exactly `burrito 1.6.0`; any other resolved Burrito version
+  triggers the Global Constraints stop rule.
+- `mise.lock` contains one Zig version line plus seven Zig 0.16.0 platform URL
+  lines, contains no Zig 0.15.2 line, and has no unrelated post-install change.
 - No dependency is divergent or unavailable.
 
 Re-run the Step 1 assertions:
@@ -126,10 +155,10 @@ Expected: both pass.
 Run:
 
 ```bash
-mix format --check-formatted
-mix compile --warnings-as-errors
-mix test
-mix ecs.regen_schema --check
+mise exec -- mix format --check-formatted
+mise exec -- mix compile --warnings-as-errors
+mise exec -- mix test
+mise exec -- mix ecs.regen_schema --check
 ```
 
 Expected: formatting is unchanged, compilation emits no warnings, the complete ExUnit suite passes, and the generated schema/Pkl module has no drift.
@@ -144,31 +173,56 @@ test "$(mise exec -- sh -c 'command -v xcrun')" = "/usr/bin/xcrun"
 
 Expected on the macOS 26 development host: pass.
 
+Record the SDK target list as diagnostic context:
+
+```bash
+sdk_path="$(/usr/bin/xcrun --show-sdk-path)"
+grep -m1 targets "$sdk_path/usr/lib/libSystem.tbd"
+```
+
+Expected on this host: the line contains `arm64e-macos` rather than
+`arm64-macos`. This observation is diagnostic only; it does not predict Zig
+0.16.0's result. The direct Burrito build below is the blocking experiment.
+
 Build both macOS targets without invoking `mise run build`, because that task still prepends the repository shim at this checkpoint:
 
 ```bash
+set -euo pipefail
+
+artifact_quarantine="$(mktemp -d "${TMPDIR:-/tmp}/ecs-task-def-pre-zig-0.16.XXXXXX")"
+if [ -d burrito_out ]; then
+  mv burrito_out "$artifact_quarantine/"
+fi
+echo "preexisting Burrito artifacts, if any, are preserved at $artifact_quarantine"
+
 ECS_TASK_DEF_RELEASE_OS=macos MIX_ENV=prod mise exec -- mix release ecs_task_def --overwrite
+mise run release-check-binaries
+file burrito_out/ecs_task_def_macos_aarch64 | rg -q 'Mach-O 64-bit executable arm64'
+file burrito_out/ecs_task_def_macos_x86_64 | rg -q 'Mach-O 64-bit executable x86_64'
+mise run release-smoke
 ```
 
-Expected: Burrito completes both targets without unresolved Darwin symbols and writes:
+Expected: the fail-fast block exits 0; Burrito completes both targets without
+unresolved Darwin symbols and writes:
 
 ```text
 burrito_out/ecs_task_def_macos_aarch64
 burrito_out/ecs_task_def_macos_x86_64
 ```
 
-Validate and smoke-test the fresh output:
+The exact-two-binaries check and both machine-readable architecture assertions
+pass, and the native aarch64 smoke test reports `release-smoke: passed`.
+Because preexisting output was moved aside before the build, none of these
+checks can pass against a stale Zig 0.15.2/shim-built binary.
+
+Any non-zero command in the block is the stop condition. Diagnose the direct
+Burrito 1.6.0/Zig 0.16.0 build rather than restoring or extending the shim, and
+do not proceed to Task 2. If abandoning the attempt, restore the tracked
+checkpoint with:
 
 ```bash
-mise run release-check-binaries
-file burrito_out/ecs_task_def_macos_aarch64
-file burrito_out/ecs_task_def_macos_x86_64
-mise run release-smoke
+git restore --source=HEAD -- mix.exs mix.lock mise.toml mise.lock
 ```
-
-Expected: the exact-two-binaries check passes, `file` identifies both as Mach-O executables for their named architectures, and the native aarch64 smoke test reports `release-smoke: passed`.
-
-Stop here if the direct build fails. Diagnose Burrito 1.6.0/Zig 0.16.0 rather than restoring or extending the shim.
 
 - [ ] **Step 7: Commit the dependency and toolchain cutover**
 
@@ -199,9 +253,7 @@ Run:
 
 ```bash
 test ! -e bin/xcrun
-if rg -n -S 'export PATH="\$PWD/bin:\$PATH"|Burrito 1\.5|Zig 0\.15\.2|bin/xcrun|MacOSX1[45]|compatibility shim' mix.exs mise.toml README.org; then
-  exit 1
-fi
+! rg -n -S 'export PATH="\$PWD/bin:\$PATH"|Burrito 1\.5|Zig 0\.15\.2|bin/xcrun|MacOSX1[45]|compatibility shim' mix.exs mise.toml README.org
 ```
 
 Expected before the edit: failure because `bin/xcrun`, the Darwin `PATH` prepend, the version-specific selector comment, and the README workaround paragraph still exist.
@@ -211,19 +263,19 @@ Expected before the edit: failure because `bin/xcrun`, the Darwin `PATH` prepend
 Replace the Darwin arm of `tasks.build` in `mise.toml` with:
 
 ```sh
-Darwin)
-  export ECS_TASK_DEF_RELEASE_OS=macos
-  ;;
+  Darwin)
+    export ECS_TASK_DEF_RELEASE_OS=macos
+    ;;
 ```
 
 Do not change the Linux or unsupported-host branches, `MIX_ENV=prod`, the release name, or `--overwrite`.
 
 - [ ] **Step 3: Delete the obsolete shim**
 
-Delete:
+Run:
 
-```text
-bin/xcrun
+```bash
+git rm bin/xcrun
 ```
 
 The file is the only tracked content under `bin`; do not replace it or retain an empty placeholder file.
@@ -254,9 +306,7 @@ Run:
 
 ```bash
 test ! -e bin/xcrun
-if rg -n -S 'export PATH="\$PWD/bin:\$PATH"|Burrito 1\.5|Zig 0\.15\.2|bin/xcrun|MacOSX1[45]|compatibility shim' mix.exs mise.toml README.org; then
-  exit 1
-fi
+! rg -n -S 'export PATH="\$PWD/bin:\$PATH"|Burrito 1\.5|Zig 0\.15\.2|bin/xcrun|MacOSX1[45]|compatibility shim' mix.exs mise.toml README.org
 ```
 
 Expected: pass with no matches.
@@ -264,32 +314,48 @@ Expected: pass with no matches.
 Search the entire active tree while excluding generated dependencies, build output, Git metadata, and historical Superpowers documents:
 
 ```bash
-if rg -n -S '0\.15\.2|Burrito 1\.5|macos-15|bin/xcrun|MacOSX1[45]|compatibility shim' \
+! rg -n -S '0\.15\.2|Burrito 1\.5|macos-15|bin/xcrun|MacOSX1[45]|compatibility shim' \
   --glob '!docs/superpowers/**' \
   --glob '!deps/**' \
   --glob '!_build/**' \
   --glob '!burrito_out/**' \
   --glob '!.git/**' \
-  .; then
-  exit 1
-fi
+  .
 ```
 
-Expected at this checkpoint: the command still fails only on the two workflow `macos-15` references scheduled for Task 3. Any other match is an incomplete Task 2 cleanup.
+Expected at this checkpoint: the assertion fails and prints exactly four lines,
+all under `.github/workflows`: `ci.yml`'s `macos-15` matrix line plus
+`release.yml`'s old Zig 0.15.2 explanation, compatibility-shim explanation,
+and `macos-15` matrix line. Task 3 removes all four. Any match outside
+`.github/workflows` is an incomplete Task 2 cleanup.
 
 - [ ] **Step 7: Verify the shared build task without the shim**
 
 Run:
 
 ```bash
-mix format --check-formatted
-mix test
+set -euo pipefail
+
+mise exec -- mix format --check-formatted
+mise exec -- mix test
+
+artifact_quarantine="$(mktemp -d "${TMPDIR:-/tmp}/ecs-task-def-pre-shim-removal.XXXXXX")"
+if [ -d burrito_out ]; then
+  mv burrito_out "$artifact_quarantine/"
+fi
+echo "preexisting Burrito artifacts, if any, are preserved at $artifact_quarantine"
+
 mise run build
 mise run release-check-binaries
+file burrito_out/ecs_task_def_macos_aarch64 | rg -q 'Mach-O 64-bit executable arm64'
+file burrito_out/ecs_task_def_macos_x86_64 | rg -q 'Mach-O 64-bit executable x86_64'
 mise run release-smoke
 ```
 
-Expected: formatting and tests pass; the normal shared build task creates exactly the two macOS binaries using the system SDK; the native binary smoke test passes.
+Expected: the fail-fast block exits 0; formatting and tests pass; the normal
+shared build task creates fresh macOS arm64 and x86_64 binaries using the
+system SDK; both architecture assertions pass; and the native binary smoke
+test passes.
 
 - [ ] **Step 8: Commit the workaround removal**
 
@@ -297,7 +363,6 @@ Run:
 
 ```bash
 git add mix.exs mise.toml README.org
-git add -u bin/xcrun
 git commit -m "chore: remove macOS SDK compatibility shim"
 ```
 
@@ -318,9 +383,7 @@ git commit -m "chore: remove macOS SDK compatibility shim"
 Run:
 
 ```bash
-if rg -n 'macos-15' .github/workflows/ci.yml .github/workflows/release.yml; then
-  exit 1
-fi
+! rg -n 'macos-15' .github/workflows/ci.yml .github/workflows/release.yml
 ```
 
 Expected before the edit: failure with one `macos-15` matrix match in each workflow and the two-line obsolete explanation in `release.yml`.
@@ -363,9 +426,7 @@ Run:
 
 ```bash
 test "$(rg -l 'macos-26' .github/workflows/ci.yml .github/workflows/release.yml | wc -l | tr -d ' ')" = "2"
-if rg -n 'macos-15' .github/workflows/ci.yml .github/workflows/release.yml; then
-  exit 1
-fi
+! rg -n 'macos-15' .github/workflows/ci.yml .github/workflows/release.yml
 ```
 
 Expected: both workflow files contain `macos-26`, and neither contains `macos-15`.
@@ -375,15 +436,13 @@ Expected: both workflow files contain `macos-26`, and neither contains `macos-15
 Run:
 
 ```bash
-if rg -n -S '0\.15\.2|Burrito 1\.5|macos-15|bin/xcrun|MacOSX1[45]|compatibility shim' \
+! rg -n -S '0\.15\.2|Burrito 1\.5|macos-15|bin/xcrun|MacOSX1[45]|compatibility shim' \
   --glob '!docs/superpowers/**' \
   --glob '!deps/**' \
   --glob '!_build/**' \
   --glob '!burrito_out/**' \
   --glob '!.git/**' \
-  .; then
-  exit 1
-fi
+  .
 ```
 
 Expected: exit 0 with no matches. Historical plans/specs remain unchanged and are intentionally excluded.
@@ -393,12 +452,24 @@ Expected: exit 0 with no matches. Historical plans/specs remain unchanged and ar
 Run:
 
 ```bash
-mix format --check-formatted
-mix compile --warnings-as-errors
-mix test
-mix ecs.regen_schema --check
+set -euo pipefail
+
+mise exec -- mix format --check-formatted
+mise exec -- mix compile --warnings-as-errors
+mise exec -- mix test
+mise exec -- mix ecs.regen_schema --check
+mise exec -- mix deps.unlock --check-unused
+
+artifact_quarantine="$(mktemp -d "${TMPDIR:-/tmp}/ecs-task-def-pre-final-build.XXXXXX")"
+if [ -d burrito_out ]; then
+  mv burrito_out "$artifact_quarantine/"
+fi
+echo "preexisting Burrito artifacts, if any, are preserved at $artifact_quarantine"
+
 mise run build
 mise run release-check-binaries
+file burrito_out/ecs_task_def_macos_aarch64 | rg -q 'Mach-O 64-bit executable arm64'
+file burrito_out/ecs_task_def_macos_x86_64 | rg -q 'Mach-O 64-bit executable x86_64'
 mise run release-smoke
 git diff --check
 ```
@@ -409,7 +480,9 @@ Expected:
 - compilation emits no warnings;
 - the complete ExUnit suite passes;
 - the schema/Pkl drift check passes;
+- no unused lock entries exist;
 - Burrito builds exactly the macOS aarch64 and x86_64 executables directly against the macOS 26 SDK;
+- both machine-readable architecture assertions pass;
 - the native binary completes the CLI smoke test; and
 - Git reports no whitespace errors.
 
