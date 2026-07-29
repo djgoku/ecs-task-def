@@ -3,7 +3,7 @@ amends "pkl:Project"
 package {
   name = "ecs-task-def"
   baseUri = "package://pkg.pkl-lang.org/github.com/djgoku/ecs-task-def/ecs-task-def"
-  version = "0.1.1" // keep in lockstep with mix.exs version
+  version = "0.1.2" // keep in lockstep with mix.exs version
   packageZipUrl = "https://github.com/djgoku/ecs-task-def/releases/download/ecs-task-def@\(version)/ecs-task-def@\(version).zip"
   exclude { "PklProject" }
 }
