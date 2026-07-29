@@ -48,7 +48,7 @@ defmodule EcsTaskDef.MixProject do
     linux_aarch64: [os: :linux, cpu: :aarch64]
   ]
 
-  # Burrito 1.5's own BURRITO_TARGET override only accepts a single target
+  # Burrito's own BURRITO_TARGET override only accepts a single target
   # alias (deps/burrito/lib/builder/builder.ex does String.to_existing_atom/1
   # on the whole value), not the comma-separated list its README describes —
   # so it can't select "both CPU architectures for this OS" in one release
