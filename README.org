@@ -170,11 +170,6 @@ The same task runs in the release workflow. It fetches Hex dependencies,
 selects both macOS or both Linux targets from the host OS, sets
 ~MIX_ENV=prod~, and uses ~--overwrite~.
 
-On macOS 26, the task prepends the repository's narrowly scoped ~bin/xcrun~
-shim so Zig 0.15.2 links against an installed macOS 14/15 SDK. Other xcrun
-operations still use ~/usr/bin/xcrun~. Remove this workaround after Burrito
-supports a Zig version that links against the macOS 26 SDK.
-
 CI (~.github/workflows/ci.yml~) runs the same test suite and regen check on
 Linux and macOS, plus a ~check-jsonschema~ cross-validation of the golden
 fixture corpus.
