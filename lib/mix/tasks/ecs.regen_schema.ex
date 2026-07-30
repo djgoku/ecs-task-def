@@ -50,6 +50,8 @@ defmodule Mix.Tasks.Ecs.RegenSchema do
         Mix.raise("codegen did not produce EcsSchema.pkl; produced: #{inspect(File.ls!(outdir))}")
       end
 
+      format_generated!(generated)
+
       # The codegen embeds the absolute local path of the source file (which
       # varies run to run, since it lives under a fresh temp dir) into the
       # generated doc comment. Rewrite it to the stable pinned upstream URL so
@@ -97,6 +99,18 @@ defmodule Mix.Tasks.Ecs.RegenSchema do
   defp download!(url, dest) do
     {_, code} = System.cmd("curl", ["-fsSL", url, "-o", dest], stderr_to_stdout: true)
     if code != 0, do: Mix.raise("failed to download #{url} (curl exit #{code})")
+  end
+
+  @doc false
+  def format_generated!(path) do
+    {output, code} =
+      System.cmd("pkl", ["format", "-w", path], stderr_to_stdout: true)
+
+    if code != 0 do
+      Mix.raise("pkl format failed (exit #{code}):\n#{output}")
+    end
+
+    :ok
   end
 
   @doc false
