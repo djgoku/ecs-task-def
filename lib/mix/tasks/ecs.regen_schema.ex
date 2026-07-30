@@ -4,11 +4,11 @@ defmodule Mix.Tasks.Ecs.RegenSchema do
   @moduledoc """
   Downloads the awslabs amazon-ecs-intellisense-schema at the commit pinned in
   EcsTaskDef.SchemaPin, regenerates the typed Pkl module with the official
-  pkl-pantry codegen, and refreshes all three committed artifacts together:
+  pkl-pantry codegen, and refreshes both committed artifacts together:
 
     * priv/schema.json    (pristine copy, embedded for the validator)
-    * pkl/EcsSchema.pkl   (source of truth, published as a Pkl package)
-    * priv/EcsSchema.pkl  (embedded copy for `init --vendor`)
+    * pkl/EcsSchema.pkl   (published as a Pkl package and copied into `priv`
+      at build time for `init --vendor`)
 
   Requires network access, curl, and pkl on PATH. Dev/CI-time only.
 
@@ -61,8 +61,7 @@ defmodule Mix.Tasks.Ecs.RegenSchema do
 
       targets = %{
         "priv/schema.json" => File.read!(schema_file),
-        "pkl/EcsSchema.pkl" => generated_contents,
-        "priv/EcsSchema.pkl" => generated_contents
+        "pkl/EcsSchema.pkl" => generated_contents
       }
 
       if check?, do: check!(targets), else: write!(targets)
