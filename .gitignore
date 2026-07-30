@@ -27,3 +27,6 @@ ecs_task_def-*.tar
 
 # Pkl package build output (pkl project package).
 /pkl/.out/
+
+# Local git worktrees used for isolated development.
+/.worktrees/

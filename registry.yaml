@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/aquaproj/aqua/v2.62.1/json-schema/registry.json
+# Local mise test from the repository root:
+# MISE_AQUA_REGISTRIES=file://$PWD/registry.yaml \
+#   mise x aqua:djgoku/ecs-task-def@0.1.2 -- ecs-task-def --help
+packages:
+  - type: github_release
+    repo_owner: djgoku
+    repo_name: ecs-task-def
+    description: Generate validated Amazon ECS task-definition JSON from Pkl
+    version_prefix: "ecs-task-def@"
+    version_filter: 'Version != "ecs-task-def@0.1.0"'
+    asset: "ecs-task-def-{{.OS}}_{{.Arch}}"
+    format: raw
+    files:
+      - name: ecs-task-def
+    replacements:
+      darwin: macos
+      amd64: x86_64
+      arm64: aarch64
+    supported_envs:
+      - darwin/arm64
+      - darwin/amd64
+      - linux/arm64
+      - linux/amd64
+    checksum:
+      type: github_release
+      asset: "{{.Asset}}.sha256"
+      algorithm: sha256

@@ -4,6 +4,11 @@ defmodule EcsTaskDef.ReleaseTasksTest do
   @repo_root Path.expand("..", __DIR__)
   @version Mix.Project.config()[:version]
   @release_tag "ecs-task-def@#{@version}"
+  @aqua_replacements %{
+    "darwin" => "macos",
+    "amd64" => "x86_64",
+    "arm64" => "aarch64"
+  }
 
   setup do
     fixture =
@@ -44,6 +49,71 @@ defmodule EcsTaskDef.ReleaseTasksTest do
       state_dir: state_dir,
       upload_dir: upload_dir
     }
+  end
+
+  test "local Aqua registry declares the supported package contract" do
+    registry = File.read!(Path.join(@repo_root, "registry.yaml"))
+
+    for fragment <- [
+          "https://raw.githubusercontent.com/aquaproj/aqua/v2.62.1/json-schema/registry.json",
+          "MISE_AQUA_REGISTRIES=file://$PWD/registry.yaml",
+          "mise x aqua:djgoku/ecs-task-def@",
+          "type: github_release",
+          "repo_owner: djgoku",
+          "repo_name: ecs-task-def",
+          ~s(version_prefix: "ecs-task-def@"),
+          ~s(version_filter: 'Version != "ecs-task-def@0.1.0"'),
+          ~s(asset: "ecs-task-def-{{.OS}}_{{.Arch}}"),
+          "format: raw",
+          "files:",
+          "      - name: ecs-task-def",
+          "darwin: macos",
+          "amd64: x86_64",
+          "arm64: aarch64",
+          "darwin/arm64",
+          "darwin/amd64",
+          "linux/arm64",
+          "linux/amd64",
+          "checksum:",
+          ~s(asset: "{{.Asset}}.sha256"),
+          "algorithm: sha256"
+        ] do
+      assert registry =~ fragment, "registry.yaml is missing #{inspect(fragment)}"
+    end
+
+    mise_config = File.read!(Path.join(@repo_root, "mise.toml"))
+    refute registry =~ "windows"
+    refute mise_config =~ "aqua.registries"
+    refute mise_config =~ "aqua:djgoku/ecs-task-def"
+  end
+
+  test "local Aqua asset template renders producer-side release names" do
+    registry = File.read!(Path.join(@repo_root, "registry.yaml"))
+
+    [_, template] =
+      Regex.run(
+        ~r/^\s*asset: "(ecs-task-def-\{\{\.OS\}\}_\{\{\.Arch\}\})"$/m,
+        registry
+      )
+
+    for {aqua_os, aqua_arch} <- [
+          {"darwin", "arm64"},
+          {"darwin", "amd64"},
+          {"linux", "arm64"},
+          {"linux", "amd64"}
+        ] do
+      release_os = Map.get(@aqua_replacements, aqua_os, aqua_os)
+      release_arch = Map.get(@aqua_replacements, aqua_arch, aqua_arch)
+
+      rendered =
+        template
+        |> String.replace("{{.OS}}", release_os)
+        |> String.replace("{{.Arch}}", release_arch)
+
+      published = binary_asset_names(release_os)
+      assert rendered in published
+      assert "#{rendered}.sha256" in published
+    end
   end
 
   test "release-ensure creates the full release tag", context do
@@ -351,10 +421,10 @@ defmodule EcsTaskDef.ReleaseTasksTest do
     Enum.filter(gh_lines(context), &String.starts_with?(&1, "release upload "))
   end
 
-  defp binary_asset_names do
+  defp binary_asset_names(os \\ host_os()) do
     for arch <- ["aarch64", "x86_64"],
         suffix <- ["", ".sha256"] do
-      "ecs-task-def-#{host_os()}_#{arch}#{suffix}"
+      "ecs-task-def-#{os}_#{arch}#{suffix}"
     end
   end
 
