@@ -7,6 +7,20 @@ defmodule Mix.Tasks.Ecs.RegenSchemaTest do
   @source_uri "file://#{@schema_file}"
   @raw_url "https://example.test/schema.json"
 
+  test "formats generated Pkl before drift comparison" do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "ecs-regen-format-#{System.unique_integer([:positive])}.pkl"
+      )
+
+    on_exit(fn -> File.rm(path) end)
+    File.write!(path, ~s[value: ("a"|"b")\n])
+
+    assert :ok = RegenSchema.format_generated!(path)
+    assert File.read!(path) == ~s[value: ("a" | "b")\n]
+  end
+
   test "normalizes wrapped and unwrapped generated source comments identically" do
     canonical = """
     /// Header.

@@ -30,7 +30,9 @@ defmodule EcsTaskDef.ScaffoldTest do
     project = File.read!(Path.join(@repo_root, "pkl/PklProject"))
 
     assert project =~ ~s[baseUri = "#{@canonical_package_base}"]
-    assert project =~ ~s[packageZipUrl = "#{@canonical_release_base}]
+
+    assert project =~
+             ~r/packageZipUrl\s*=\s*"#{Regex.escape(@canonical_release_base)}/
 
     assert [_, package_base] =
              Regex.run(~r/^\s*baseUri = "([^"]+)"$/m, project)

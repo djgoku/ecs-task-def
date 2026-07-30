@@ -1,11 +1,37 @@
+defmodule Mix.Tasks.Compile.EcsSchema do
+  use Mix.Task.Compiler
+
+  @recursive true
+
+  @impl true
+  def run(_args) do
+    project_root = File.cwd!()
+    source = Path.join(project_root, "pkl/EcsSchema.pkl")
+    source_priv = Path.join(project_root, "priv")
+    build_priv = Path.join(Mix.Project.app_path(), "priv")
+    destination = Path.join(build_priv, "EcsSchema.pkl")
+
+    unless File.regular?(source) do
+      Mix.raise("cannot copy ECS schema: #{source} is not a regular file")
+    end
+
+    File.rm_rf!(build_priv)
+    File.cp_r!(source_priv, build_priv)
+    File.cp!(source, destination)
+
+    {:ok, []}
+  end
+end
+
 defmodule EcsTaskDef.MixProject do
   use Mix.Project
 
   def project do
     [
       app: :ecs_task_def,
-      version: "0.1.2",
+      version: "0.1.3",
       elixir: "~> 1.20",
+      compilers: [:ecs_schema] ++ Mix.compilers(),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       releases: releases()
